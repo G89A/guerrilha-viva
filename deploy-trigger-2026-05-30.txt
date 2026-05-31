@@ -1,0 +1,2 @@
+Forcar novo deploy Vercel apos criacao da rota /api/ui.
+Data: 2026-05-30
