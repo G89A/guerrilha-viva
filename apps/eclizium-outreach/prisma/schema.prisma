@@ -35,9 +35,10 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  sessions  Session[]
-  members   WorkspaceMember[]
-  auditLogs AuditLog[]
+  sessions     Session[]
+  members      WorkspaceMember[]
+  auditLogs    AuditLog[]
+  suppressions SuppressionEntry[]
 
   @@map("users")
 }
@@ -65,9 +66,14 @@ model Session {
 }
 
 model Workspace {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  /// Região ISO 3166-1 alpha-2 usada para normalizar telefones sem código de
+  /// país (ver features/contacts/phone.ts).
+  defaultPhoneRegion String @default("BR") @map("default_phone_region")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -113,35 +119,56 @@ model WorkspaceMember {
 enum ContactStatus {
   ACTIVE
   ARCHIVED
+  /// Telefone comprovadamente inválido: não entra em campanha, mas o registro
+  /// é preservado para auditoria e para não ser reimportado como novo.
+  INVALID
 }
 
 model Contact {
-  id          String        @id @default(cuid())
-  workspaceId String        @map("workspace_id")
-  phoneE164   String        @map("phone_e164")
-  firstName   String?       @map("first_name")
-  lastName    String?       @map("last_name")
+  id          String  @id @default(cuid())
+  workspaceId String  @map("workspace_id")
+  /// Telefone exatamente como informado, preservado para conferência humana.
+  phone       String?
+  /// Forma canônica E.164. É a identidade do contato dentro do workspace.
+  phoneE164   String  @map("phone_e164")
+  firstName   String? @map("first_name")
+  lastName    String? @map("last_name")
   email       String?
+  company     String?
+  segment     String?
+  city        String?
+  state       String?
+  country     String?
   locale      String?
   timezone    String?
-  attributes  Json          @default("{}")
-  status      ContactStatus @default(ACTIVE)
-  source      String?
-  archivedAt  DateTime?     @map("archived_at")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  notes       String?
+  /// Colunas extras vindas de importação, sem esquema fixo.
+  attributes  Json    @default("{}")
+
+  status     ContactStatus @default(ACTIVE)
+  source     String?
+  archivedAt DateTime?     @map("archived_at")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
 
   workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   consents      ContactConsent[]
   listMembers   ContactListMember[]
   tags          ContactTag[]
+  suppressions  SuppressionEntry[]
   recipients    CampaignRecipient[]
   conversations Conversation[]
   messages      Message[]
 
   @@unique([workspaceId, phoneE164])
+  /// Alvo das foreign keys compostas das tabelas de junção: garante no banco
+  /// que um vínculo nunca cruza workspaces.
+  @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, city])
+  @@index([workspaceId, source])
+  @@index([workspaceId, company])
   @@index([phoneE164])
   @@map("contacts")
 }
@@ -154,7 +181,6 @@ enum ConsentChannel {
 
 enum ConsentStatus {
   UNKNOWN
-  PENDING
   GRANTED
   REVOKED
 }
@@ -170,20 +196,24 @@ enum ConsentSource {
 }
 
 model ContactConsent {
-  id          String         @id @default(cuid())
-  workspaceId String         @map("workspace_id")
-  contactId   String         @map("contact_id")
-  channel     ConsentChannel
-  status      ConsentStatus  @default(UNKNOWN)
-  source      ConsentSource  @default(MANUAL)
-  evidence    String?
-  grantedAt   DateTime?      @map("granted_at")
-  revokedAt   DateTime?      @map("revoked_at")
-  createdAt   DateTime       @default(now()) @map("created_at")
-  updatedAt   DateTime       @updatedAt @map("updated_at")
+  id             String         @id @default(cuid())
+  workspaceId    String         @map("workspace_id")
+  contactId      String         @map("contact_id")
+  channel        ConsentChannel
+  status         ConsentStatus  @default(UNKNOWN)
+  source         ConsentSource  @default(MANUAL)
+  /// Referência à prova do consentimento (URL do formulário, id do registro
+  /// de origem, protocolo). Texto livre, nunca um segredo.
+  proofReference String?        @map("proof_reference")
+  capturedAt     DateTime?      @map("captured_at")
+  revokedAt      DateTime?      @map("revoked_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// Foreign key COMPOSTA: um consentimento não pode apontar para um contato de
+  /// outro workspace, mesmo que um serviço esqueça o filtro.
+  contact   Contact   @relation(fields: [workspaceId, contactId], references: [workspaceId, id], onDelete: Cascade)
 
   @@unique([contactId, channel])
   @@index([workspaceId, channel, status])
@@ -203,20 +233,24 @@ model ContactList {
   campaigns Campaign[]
 
   @@unique([workspaceId, name])
+  @@unique([workspaceId, id])
   @@map("contact_lists")
 }
 
 model ContactListMember {
-  id        String   @id @default(cuid())
-  listId    String   @map("list_id")
-  contactId String   @map("contact_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  listId      String   @map("list_id")
+  contactId   String   @map("contact_id")
+  createdAt   DateTime @default(now()) @map("created_at")
 
-  list    ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
-  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// Mesmo racional das ContactTag: o vínculo não pode cruzar workspaces.
+  list    ContactList @relation(fields: [workspaceId, listId], references: [workspaceId, id], onDelete: Cascade)
+  contact Contact     @relation(fields: [workspaceId, contactId], references: [workspaceId, id], onDelete: Cascade)
 
   @@unique([listId, contactId])
   @@index([contactId])
+  @@index([workspaceId])
   @@map("contact_list_members")
 }
 
@@ -232,30 +266,34 @@ model Tag {
   contacts  ContactTag[]
 
   @@unique([workspaceId, name])
+  @@unique([workspaceId, id])
   @@map("tags")
 }
 
 model ContactTag {
-  id        String   @id @default(cuid())
-  tagId     String   @map("tag_id")
-  contactId String   @map("contact_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  tagId       String   @map("tag_id")
+  contactId   String   @map("contact_id")
+  createdAt   DateTime @default(now()) @map("created_at")
 
-  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// Foreign keys COMPOSTAS: o PostgreSQL recusa vincular uma tag de um
+  /// workspace a um contato de outro, mesmo que o serviço erre.
+  tag     Tag     @relation(fields: [workspaceId, tagId], references: [workspaceId, id], onDelete: Cascade)
+  contact Contact @relation(fields: [workspaceId, contactId], references: [workspaceId, id], onDelete: Cascade)
 
   @@unique([tagId, contactId])
   @@index([contactId])
+  @@index([workspaceId])
   @@map("contact_tags")
 }
 
 enum SuppressionReason {
   OPT_OUT
-  MANUAL
+  BLOCKED
   COMPLAINT
-  HARD_BOUNCE
-  INVALID_NUMBER
-  PROVIDER_BLOCK
+  INVALID
+  MANUAL
 }
 
 /// A suppressed phone number must never receive outbound campaign traffic.
@@ -263,15 +301,29 @@ enum SuppressionReason {
 model SuppressionEntry {
   id          String            @id @default(cuid())
   workspaceId String            @map("workspace_id")
+  /// Vínculo com o contato, para histórico e UI. Anulável de propósito: a
+  /// supressão sobrevive à remoção do contato.
+  contactId   String?           @map("contact_id")
+  /// Chave durável. Um contato reimportado com o mesmo número continua
+  /// suprimido, mesmo que o registro anterior não exista mais.
   phoneE164   String            @map("phone_e164")
+  channel     ConsentChannel    @default(WHATSAPP)
   reason      SuppressionReason
   notes       String?
+  createdById String?           @map("created_by_id")
   createdAt   DateTime          @default(now()) @map("created_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /// FK simples, e não composta: `onDelete: SetNull` não pode anular
+  /// `workspaceId`, que é obrigatório. A supressão PRECISA sobreviver à
+  /// remoção do contato, então a garantia de tenant aqui vem do serviço —
+  /// `suppressContact` valida a posse com `getContactOrThrow` antes de escrever.
+  contact   Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@unique([workspaceId, phoneE164])
+  @@unique([workspaceId, channel, phoneE164])
   @@index([workspaceId, createdAt])
+  @@index([contactId])
   @@map("suppression_entries")
 }
 
