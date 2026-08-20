@@ -17,7 +17,21 @@ export type AuditAction =
   | 'workspace.switched'
   | 'workspace.member_added'
   | 'workspace.member_role_changed'
-  | 'workspace.member_removed';
+  | 'workspace.member_removed'
+  | 'contact.created'
+  | 'contact.updated'
+  | 'contact.archived'
+  | 'contact.restored'
+  | 'contact.import_started'
+  | 'contact.import_completed'
+  | 'contact.tag_added'
+  | 'contact.tag_removed'
+  | 'contact.list_member_added'
+  | 'contact.list_member_removed'
+  | 'contact.consent_updated'
+  | 'contact.suppressed'
+  | 'contact.unsuppressed'
+  | 'contact.batch_action';
 
 export interface WriteAuditLogInput {
   action: AuditAction;
