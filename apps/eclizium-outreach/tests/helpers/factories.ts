@@ -42,11 +42,27 @@ export async function seedTenant(label = 'tenant'): Promise<SeededTenant> {
   return { userId: user.id, email, workspaceId: workspace.id, workspaceSlug: workspace.slug };
 }
 
-export async function seedContact(workspaceId: string, phoneE164: string): Promise<string> {
+export async function seedContact(
+  workspaceId: string,
+  phoneE164: string,
+  overrides: Partial<{
+    firstName: string;
+    lastName: string;
+    email: string;
+    company: string;
+    city: string;
+    source: string;
+  }> = {},
+): Promise<string> {
   const contact = await testPrisma().contact.create({
-    data: { workspaceId, phoneE164, firstName: 'Contato' },
+    data: { workspaceId, phoneE164, firstName: 'Contato', ...overrides },
   });
   return contact.id;
+}
+
+/** Workspace no formato que os serviços de contato esperam. */
+export function workspaceRef(workspaceId: string, region = 'BR') {
+  return { id: workspaceId, defaultPhoneRegion: region };
 }
 
 export async function seedUserWithPassword(
