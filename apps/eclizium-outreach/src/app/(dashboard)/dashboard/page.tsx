@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
 
 const ROADMAP = [
   { sprint: 'Sprint 0', title: 'Plataforma base', detail: 'Auth, workspace, schema, logging, testes.', done: true },
-  { sprint: 'Sprint 1', title: 'Contatos', detail: 'Listas, tags, consentimento e suppression.', done: false },
+  { sprint: 'Sprint 1', title: 'Contatos', detail: 'Listas, tags, consentimento e suppression.', done: true },
   { sprint: 'Sprint 2', title: 'Provider Meta', detail: 'Canal, templates e envio individual.', done: false },
   { sprint: 'Sprint 3', title: 'Webhooks', detail: 'Eventos, mensagens e status.', done: false },
   { sprint: 'Sprint 4', title: 'Campanhas', detail: 'Destinatários e elegibilidade.', done: false },
