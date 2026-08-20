@@ -22,7 +22,7 @@ templates, campanhas, fila, inbox ou analytics.
 
 ## Banco
 
-Uma migration: `20260820184350_0001_initial_schema` — 20 tabelas e 16 enums,
+Uma migration: `20260820184350_0001_initial_schema` — 19 tabelas, 17 enums e 43 índices,
 cobrindo o modelo completo do produto (contatos a webhooks). Apenas
 `users`, `sessions`, `workspaces`, `workspace_members` e `audit_logs` têm
 lógica de aplicação nesta sprint; as demais existem para que as próximas
@@ -94,7 +94,7 @@ variáveis e nunca exibe valores. Nenhum caminho do código simula envio.
 | Sem convite de membros | Workspace só cresce por seed | Proprietário criado junto com o workspace | Sprint futura |
 | scrypt em vez de argon2id | KDF adequado, porém não o estado da arte | Parâmetros versionados no hash + `needsRehash()` | Quando houver build nativo confiável |
 | Sem Row Level Security | Um `WHERE` esquecido vaza dados | `workspaceScope()` + suíte de tenancy | Melhoria futura |
-| 15 tabelas ainda sem lógica | Schema pode precisar de ajuste ao ser usado | Migrations incrementais | Sprints 1–7 |
+| 14 tabelas ainda sem lógica | Schema pode precisar de ajuste ao ser usado | Migrations incrementais | Sprints 1–7 |
 
 ## Definition of Done — o que está fechado
 
