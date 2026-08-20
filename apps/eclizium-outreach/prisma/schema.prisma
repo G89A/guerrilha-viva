@@ -1,0 +1,612 @@
+// ECLIZIUM Outreach — data model.
+//
+// Multi-tenancy rule: every business entity carries `workspaceId`. The value is
+// always derived server-side from the authenticated session (see
+// src/lib/auth/guards.ts); it is never read from client input.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & tenancy
+// ---------------------------------------------------------------------------
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String    @map("password_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  sessions  Session[]
+  members   WorkspaceMember[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+/// Opaque, server-issued session. Only the SHA-256 hash of the token is stored,
+/// so a database dump cannot be replayed as a login.
+model Session {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  tokenHash         String    @unique @map("token_hash")
+  activeWorkspaceId String?   @map("active_workspace_id")
+  ipAddress         String?   @map("ip_address")
+  userAgent         String?   @map("user_agent")
+  expiresAt         DateTime  @map("expires_at")
+  lastUsedAt        DateTime  @default(now()) @map("last_used_at")
+  revokedAt         DateTime? @map("revoked_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeWorkspace Workspace? @relation(fields: [activeWorkspaceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members            WorkspaceMember[]
+  sessions           Session[]
+  contacts           Contact[]
+  contactLists       ContactList[]
+  tags               Tag[]
+  suppressionEntries SuppressionEntry[]
+  channels           MessagingChannel[]
+  templates          MessageTemplate[]
+  campaigns          Campaign[]
+  conversations      Conversation[]
+  messages           Message[]
+  webhookEvents      WebhookEvent[]
+  auditLogs          AuditLog[]
+  consents           ContactConsent[]
+  campaignRecipients CampaignRecipient[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  userId      String        @map("user_id")
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+// ---------------------------------------------------------------------------
+// Contacts
+// ---------------------------------------------------------------------------
+
+enum ContactStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Contact {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  phoneE164   String        @map("phone_e164")
+  firstName   String?       @map("first_name")
+  lastName    String?       @map("last_name")
+  email       String?
+  locale      String?
+  timezone    String?
+  attributes  Json          @default("{}")
+  status      ContactStatus @default(ACTIVE)
+  source      String?
+  archivedAt  DateTime?     @map("archived_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  consents      ContactConsent[]
+  listMembers   ContactListMember[]
+  tags          ContactTag[]
+  recipients    CampaignRecipient[]
+  conversations Conversation[]
+  messages      Message[]
+
+  @@unique([workspaceId, phoneE164])
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
+  @@index([phoneE164])
+  @@map("contacts")
+}
+
+enum ConsentChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+}
+
+enum ConsentStatus {
+  UNKNOWN
+  PENDING
+  GRANTED
+  REVOKED
+}
+
+enum ConsentSource {
+  MANUAL
+  CSV_IMPORT
+  WEB_FORM
+  API
+  INBOUND_MESSAGE
+  PROVIDER_EVENT
+  OTHER
+}
+
+model ContactConsent {
+  id          String         @id @default(cuid())
+  workspaceId String         @map("workspace_id")
+  contactId   String         @map("contact_id")
+  channel     ConsentChannel
+  status      ConsentStatus  @default(UNKNOWN)
+  source      ConsentSource  @default(MANUAL)
+  evidence    String?
+  grantedAt   DateTime?      @map("granted_at")
+  revokedAt   DateTime?      @map("revoked_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, channel])
+  @@index([workspaceId, channel, status])
+  @@map("contact_consents")
+}
+
+model ContactList {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   ContactListMember[]
+  campaigns Campaign[]
+
+  @@unique([workspaceId, name])
+  @@map("contact_lists")
+}
+
+model ContactListMember {
+  id        String   @id @default(cuid())
+  listId    String   @map("list_id")
+  contactId String   @map("contact_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  list    ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, contactId])
+  @@index([contactId])
+  @@map("contact_list_members")
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  color       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contacts  ContactTag[]
+
+  @@unique([workspaceId, name])
+  @@map("tags")
+}
+
+model ContactTag {
+  id        String   @id @default(cuid())
+  tagId     String   @map("tag_id")
+  contactId String   @map("contact_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([tagId, contactId])
+  @@index([contactId])
+  @@map("contact_tags")
+}
+
+enum SuppressionReason {
+  OPT_OUT
+  MANUAL
+  COMPLAINT
+  HARD_BOUNCE
+  INVALID_NUMBER
+  PROVIDER_BLOCK
+}
+
+/// A suppressed phone number must never receive outbound campaign traffic.
+/// Keyed by phone (not contact) so a re-imported contact stays suppressed.
+model SuppressionEntry {
+  id          String            @id @default(cuid())
+  workspaceId String            @map("workspace_id")
+  phoneE164   String            @map("phone_e164")
+  reason      SuppressionReason
+  notes       String?
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, phoneE164])
+  @@index([workspaceId, createdAt])
+  @@map("suppression_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Messaging channels & templates
+// ---------------------------------------------------------------------------
+
+enum ChannelProvider {
+  META_WHATSAPP
+}
+
+enum ChannelStatus {
+  NOT_CONFIGURED
+  CONNECTED
+  DISABLED
+  ERROR
+}
+
+model MessagingChannel {
+  id             String          @id @default(cuid())
+  workspaceId    String          @map("workspace_id")
+  provider       ChannelProvider @default(META_WHATSAPP)
+  status         ChannelStatus   @default(NOT_CONFIGURED)
+  displayName    String          @map("display_name")
+  phoneNumberId  String?         @map("phone_number_id")
+  wabaId         String?         @map("waba_id")
+  phoneE164      String?         @map("phone_e164")
+  lastError      String?         @map("last_error")
+  lastVerifiedAt DateTime?       @map("last_verified_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  templates     MessageTemplate[]
+  campaigns     Campaign[]
+  conversations Conversation[]
+  messages      Message[]
+
+  @@unique([workspaceId, provider, phoneNumberId])
+  @@index([workspaceId, status])
+  @@map("messaging_channels")
+}
+
+enum TemplateStatus {
+  UNKNOWN
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  DISABLED
+}
+
+enum TemplateCategory {
+  UNKNOWN
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+/// Mirrors provider-owned template state. `status` is only ever written from a
+/// provider response — never set locally (see docs/adr/0005).
+model MessageTemplate {
+  id                 String           @id @default(cuid())
+  workspaceId        String           @map("workspace_id")
+  channelId          String           @map("channel_id")
+  providerTemplateId String?          @map("provider_template_id")
+  name               String
+  language           String
+  category           TemplateCategory @default(UNKNOWN)
+  status             TemplateStatus   @default(UNKNOWN)
+  body               String
+  components         Json             @default("[]")
+  variableCount      Int              @default(0) @map("variable_count")
+  rejectedReason     String?          @map("rejected_reason")
+  syncedAt           DateTime?        @map("synced_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel   MessagingChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+  messages  Message[]
+
+  @@unique([channelId, name, language])
+  @@index([workspaceId, status])
+  @@map("message_templates")
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+model Campaign {
+  id            String         @id @default(cuid())
+  workspaceId   String         @map("workspace_id")
+  name          String
+  status        CampaignStatus @default(DRAFT)
+  channelId     String?        @map("channel_id")
+  templateId    String?        @map("template_id")
+  listId        String?        @map("list_id")
+  variableMap   Json           @default("{}") @map("variable_map")
+  scheduledAt   DateTime?      @map("scheduled_at")
+  startedAt     DateTime?      @map("started_at")
+  completedAt   DateTime?      @map("completed_at")
+  cancelledAt   DateTime?      @map("cancelled_at")
+  failureReason String?        @map("failure_reason")
+  createdById   String?        @map("created_by_id")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  workspace  Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel    MessagingChannel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  template   MessageTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  list       ContactList?        @relation(fields: [listId], references: [id], onDelete: SetNull)
+  recipients CampaignRecipient[]
+  messages   Message[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, scheduledAt])
+  @@map("campaigns")
+}
+
+enum RecipientStatus {
+  PENDING
+  ELIGIBLE
+  INELIGIBLE
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  REPLIED
+  FAILED
+  CANCELLED
+}
+
+model CampaignRecipient {
+  id                String          @id @default(cuid())
+  workspaceId       String          @map("workspace_id")
+  campaignId        String          @map("campaign_id")
+  contactId         String          @map("contact_id")
+  status            RecipientStatus @default(PENDING)
+  /// Deterministic key (campaignId:contactId:stepId) that makes retries safe.
+  idempotencyKey    String          @map("idempotency_key")
+  ineligibleReasons String[]        @default([]) @map("ineligible_reasons")
+  variables         Json            @default("{}")
+  attemptCount      Int             @default(0) @map("attempt_count")
+  queuedAt          DateTime?       @map("queued_at")
+  sentAt            DateTime?       @map("sent_at")
+  deliveredAt       DateTime?       @map("delivered_at")
+  readAt            DateTime?       @map("read_at")
+  repliedAt         DateTime?       @map("replied_at")
+  failedAt          DateTime?       @map("failed_at")
+  failureCode       String?         @map("failure_code")
+  failureMessage    String?         @map("failure_message")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([campaignId, contactId])
+  @@unique([idempotencyKey])
+  @@index([campaignId, status])
+  @@index([workspaceId, status])
+  @@map("campaign_recipients")
+}
+
+// ---------------------------------------------------------------------------
+// Conversations & messages
+// ---------------------------------------------------------------------------
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+model Conversation {
+  id            String             @id @default(cuid())
+  workspaceId   String             @map("workspace_id")
+  channelId     String             @map("channel_id")
+  contactId     String             @map("contact_id")
+  status        ConversationStatus @default(OPEN)
+  assigneeId    String?            @map("assignee_id")
+  unreadCount   Int                @default(0) @map("unread_count")
+  lastMessageAt DateTime?          @map("last_message_at")
+  lastInboundAt DateTime?          @map("last_inbound_at")
+  closedAt      DateTime?          @map("closed_at")
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel   MessagingChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact   Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([channelId, contactId])
+  @@index([workspaceId, status, lastMessageAt])
+  @@map("conversations")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+enum MessageType {
+  TEXT
+  TEMPLATE
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+  STICKER
+  LOCATION
+  CONTACTS
+  INTERACTIVE
+  UNSUPPORTED
+}
+
+model Message {
+  id                String           @id @default(cuid())
+  workspaceId       String           @map("workspace_id")
+  channelId         String           @map("channel_id")
+  conversationId    String?          @map("conversation_id")
+  contactId         String           @map("contact_id")
+  campaignId        String?          @map("campaign_id")
+  recipientId       String?          @map("recipient_id")
+  templateId        String?          @map("template_id")
+  direction         MessageDirection
+  type              MessageType      @default(TEXT)
+  status            MessageStatus    @default(QUEUED)
+  body              String?
+  payload           Json             @default("{}")
+  /// Provider-assigned id (e.g. Meta `wamid.*`). Unique per workspace so
+  /// duplicated webhook deliveries cannot create a second row.
+  providerMessageId String?          @map("provider_message_id")
+  errorCode         String?          @map("error_code")
+  errorMessage      String?          @map("error_message")
+  sentAt            DateTime?        @map("sent_at")
+  deliveredAt       DateTime?        @map("delivered_at")
+  readAt            DateTime?        @map("read_at")
+  failedAt          DateTime?        @map("failed_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel      MessagingChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversation Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  contact      Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign     Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  recipient    CampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  template     MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, providerMessageId])
+  @@index([conversationId, createdAt])
+  @@index([workspaceId, status])
+  @@index([campaignId, status])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks & audit
+// ---------------------------------------------------------------------------
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+/// Raw provider payload, stored before any processing. `providerEventId` is
+/// unique per provider so redelivered events are dropped, not reprocessed.
+model WebhookEvent {
+  id              String             @id @default(cuid())
+  workspaceId     String?            @map("workspace_id")
+  provider        ChannelProvider    @default(META_WHATSAPP)
+  providerEventId String             @map("provider_event_id")
+  eventType       String?            @map("event_type")
+  status          WebhookEventStatus @default(RECEIVED)
+  payload         Json
+  signatureValid  Boolean            @default(false) @map("signature_valid")
+  processedAt     DateTime?          @map("processed_at")
+  error           String?
+  createdAt       DateTime           @default(now()) @map("created_at")
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@index([status, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("webhook_events")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  workspaceId  String?  @map("workspace_id")
+  actorUserId  String?  @map("actor_user_id")
+  actorType    String   @default("USER") @map("actor_type")
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  metadata     Json     @default("{}")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actor     User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, resourceType, resourceId])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
