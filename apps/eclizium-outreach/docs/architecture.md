@@ -44,6 +44,9 @@ devolvido ao cliente como `INTERNAL_ERROR` genérico.
 | Token de sessão nunca em texto claro | `sha256` antes do `INSERT` |
 | Segredo nunca vai para o log | `lib/logging/redact.ts` |
 | Ação sensível deixa rastro | `writeAuditLog` |
+| Vínculo nunca cruza workspaces | FKs compostas em `contact_tags`, `contact_list_members`, `contact_consents` (ADR 0009) |
+| Telefone tem uma única forma canônica | `features/contacts/phone.ts` (ADR 0008) |
+| Opt-out sobrevive à remoção do contato | Supressão chaveada por telefone (ADR 0010) |
 
 ## Estado das integrações
 

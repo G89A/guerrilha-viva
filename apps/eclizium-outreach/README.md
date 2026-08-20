@@ -2,10 +2,12 @@
 
 Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business.
 
-**Estado atual: SPRINT 0 concluída.** Base de plataforma pronta — autenticação,
-workspaces, schema completo, tratamento de erros, logging e testes. Contatos,
-templates, campanhas, fila, inbox e analytics ainda **não** existem, e a
-interface diz isso explicitamente em vez de simular.
+**Estado atual: SPRINT 1 concluída.** Base de plataforma (auth, workspaces,
+schema, erros, logging, testes) mais o núcleo de CRM e compliance: contatos,
+listas, tags, consentimentos, suppression list, importação CSV com wizard,
+deduplicação por telefone, busca e filtros. Templates, campanhas, fila, inbox e
+analytics ainda **não** existem, e a interface diz isso explicitamente em vez de
+simular.
 
 Nenhuma integração externa está configurada. O canal WhatsApp reporta
 `NOT_CONFIGURED` e a tela de integrações lista exatamente quais variáveis
@@ -77,6 +79,12 @@ Destaques da suíte:
 - `tests/integration/tenancy.test.ts` — red team de multi-tenancy: leitura,
   escrita e remoção entre workspaces, sessão apontando para workspace alheio,
   usuário sem associação, papel insuficiente.
+- `tests/integration/contacts-tenancy.test.ts` — red team do CRM: ler, editar,
+  arquivar, taguear, listar, consentir e suprimir contato de outro workspace.
+- `tests/integration/contacts-redteam.test.ts` — duplo clique, operações
+  concorrentes, telefone malformado, injeção em campo de texto.
+- `tests/integration/csv-import.test.ts` — duplicados no arquivo e no banco,
+  telefone inválido, fórmula, acentuação, lotes.
 - `tests/integration/constraints.test.ts` — red team de banco: telefone
   duplicado, chave de idempotência reusada, webhook redelivered, destinatário
   duplicado.
@@ -113,14 +121,38 @@ Configure o projeto Vercel com:
 Se `DATABASE_URL` apontar para um pooler (PgBouncer, Neon), defina também
 `DIRECT_DATABASE_URL` com a conexão direta, exigida pelas migrations.
 
+## Contatos e compliance
+
+| Rota | O que faz |
+|---|---|
+| `/contacts` | Listagem com busca, filtros na query string, paginação server-side e ações em lote |
+| `/contacts/new` | Cadastro com normalização E.164 e consentimento inicial |
+| `/contacts/[id]` | Ficha com dados, tags, listas, consentimentos por canal, supressão e histórico de auditoria |
+| `/contacts/[id]/edit` | Edição com deduplicação por telefone |
+| `/contacts/import` | Wizard CSV: upload → preview → mapeamento → validação → origem/consentimento → resultado |
+
+Regras que valem a pena conhecer antes de mexer:
+
+- Telefone é normalizado para E.164 **apenas** em `features/contacts/phone.ts`
+  (ADR 0008). Não replique essa lógica.
+- `(workspaceId, phoneE164)` é a identidade do contato. Duplicado devolve
+  `CONFLICT` com mensagem de negócio, nunca erro do Prisma.
+- Supressão é ancorada no telefone e sobrevive à remoção do contato (ADR 0010).
+  `suppressContact` é o único caminho de entrada; `unsuppressContact` exige
+  papel ADMIN e motivo.
+- Consentimento nunca é presumido: o padrão é `UNKNOWN`, inclusive na
+  importação.
+- Contatos não são apagados pela operação normal — são arquivados.
+
 ## Documentação
 
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
 - `docs/sprint-0-report.md` — relatório de encerramento da Sprint 0
+- `docs/sprint-1-report.md` — relatório da Sprint 1, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
 
-`/contacts`, `/templates`, `/campaigns`, `/inbox`, `/analytics` não existem. A
-navegação lateral mostra essas seções desabilitadas, com a sprint responsável,
-em vez de links que levariam a telas quebradas.
+`/templates`, `/campaigns`, `/inbox`, `/analytics` não existem. A navegação
+lateral mostra essas seções desabilitadas, com a sprint responsável, em vez de
+links que levariam a telas quebradas.
