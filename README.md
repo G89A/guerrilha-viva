@@ -29,3 +29,19 @@ O navegador chama `/api/chat`; o backend chama a OpenAI.
 ## Limite importante
 
 O app só terá internet se a opção Usar web estiver ativada e se a conta/modelo/API suportar a ferramenta de web search.
+
+---
+
+## Outros projetos neste repositório
+
+### ECLIZIUM Outreach — `apps/eclizium-outreach/`
+
+Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business
+(Next.js + Prisma + PostgreSQL). É uma aplicação independente, com o próprio
+`package.json`, build e migrations; nada do app Guerrilha Viva descrito acima
+foi alterado.
+
+Para publicá-la na Vercel, crie um projeto separado apontando para o mesmo
+repositório com **Root Directory = `apps/eclizium-outreach`**.
+
+Documentação: [`apps/eclizium-outreach/README.md`](apps/eclizium-outreach/README.md).
