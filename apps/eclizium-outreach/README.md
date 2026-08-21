@@ -206,6 +206,34 @@ Regras que valem a pena conhecer antes de mexer:
 - Resposta livre só dentro da janela de 24 horas da Meta, calculada de
   `lastInboundAt` — nunca presumida aberta.
 
+## Campanhas
+
+| Rota | O que faz |
+|---|---|
+| `/campaigns` | Painel com cartões por estado e tabela paginada |
+| `/campaigns/new` | Wizard de 9 etapas — cria a campanha como rascunho |
+| `/campaigns/[id]` | Detalhe, ações, métricas e destinatários |
+
+Regras que valem a pena conhecer antes de mexer:
+
+- **Nada é enviado na Sprint 4.** `startCampaign` marca `RUNNING` e delega para
+  `CampaignExecutionService`, que hoje recusa com `NOT_CONFIGURED`. A tela diz
+  isso ao operador em vez de fingir que enfileirou.
+- **Campanha exige template APROVADO pela Meta.** Free-form é só para a Inbox,
+  dentro da janela de atendimento — nunca como atalho para campanha.
+- **A audiência é congelada na preparação** (ADR 0017), não resolvida por
+  consulta na hora do envio. Por isso a Sprint 5 tem de reavaliar a
+  elegibilidade imediatamente antes de cada envio.
+- **Supressão vence tudo:** lista, tag, campanha anterior e até consentimento
+  concedido.
+- **`UNKNOWN` nunca vira `GRANTED`.** Telefone existente não é consentimento.
+- **Toda transição de estado é compare-and-set atômico.** Preparar, pausar,
+  retomar e cancelar sobrevivem a 50 chamadas simultâneas — há teste.
+- **Métricas vêm de agregação** (ADR 0016); os contadores em `Campaign` são
+  cache recalculado, nunca incrementado.
+- Faltou valor para uma variável? O contato é bloqueado, a menos que exista um
+  texto alternativo escrito explicitamente. Nada é inventado.
+
 ## Documentação
 
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
@@ -213,13 +241,17 @@ Regras que valem a pena conhecer antes de mexer:
 - `docs/sprint-1-report.md` — relatório da Sprint 1, com limitações conhecidas
 - `docs/sprint-2-report.md` — relatório da Sprint 2, com limitações conhecidas
 - `docs/sprint-3-report.md` — relatório da Sprint 3, com limitações conhecidas
+- `docs/sprint-4-report.md` — relatório da Sprint 4, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
 
-`/campaigns` e `/analytics` não existem. A navegação lateral mostra essas seções
-desabilitadas, com a sprint responsável, em vez de links que levariam a telas
-quebradas.
+`/analytics` não existe. A navegação lateral mostra a seção desabilitada, com a
+sprint responsável, em vez de um link que levaria a uma tela quebrada.
+
+O **disparo de campanhas** também não: a Sprint 4 monta a audiência, avalia a
+elegibilidade e prepara tudo, mas o envio em massa — fila, workers, retry,
+vazão — é da Sprint 5.
 
 A integração com a Meta está **implementada mas não validada contra credenciais
 reais**: toda a lógica é exercitada contra fixtures no formato documentado e
