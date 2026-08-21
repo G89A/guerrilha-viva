@@ -200,8 +200,17 @@ export class MetaGraphClient {
           httpStatus: response.status,
           durationMs,
         });
+        // Corpo ilegível com status de ERRO é quase sempre página de gateway
+        // (502/503 em HTML): a requisição não chegou a ser processada, então
+        // vale tentar de novo.
+        //
+        // Corpo ilegível com status de SUCESSO é outra história: a mensagem
+        // pode ter sido enviada e apenas a resposta veio corrompida. Retentar
+        // arriscaria mandar a mesma mensagem duas vezes para uma pessoa real,
+        // então esse caso NÃO é retentável.
         throw new ProviderError('MALFORMED_RESPONSE', 'Resposta do provedor não é JSON válido.', {
           httpStatus: response.status,
+          retryable: !response.ok,
         });
       }
     }

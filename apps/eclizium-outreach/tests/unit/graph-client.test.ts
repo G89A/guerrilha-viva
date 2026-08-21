@@ -195,14 +195,29 @@ describe('MetaGraphClient', () => {
     expect(isProviderError(error) && error.kind).toBe('NETWORK');
   });
 
-  it('reporta MALFORMED_RESPONSE para corpo que não é JSON', async () => {
-    const { fetchImpl } = fakeGraph([{ raw: '<html>502 Bad Gateway</html>' }]);
+  it('corpo ilegível com status de SUCESSO não é retentável', async () => {
+    // A mensagem pode ter sido enviada e só a resposta veio corrompida:
+    // retentar arriscaria duplicar para uma pessoa real.
+    const { fetchImpl } = fakeGraph([{ status: 200, raw: '<html>resposta corrompida</html>' }]);
     const error = await client(fetchImpl)
       .request({ method: 'GET', path: '1', operation: 'test' })
       .catch((caught: unknown) => caught);
 
     expect(isProviderError(error) && error.kind).toBe('MALFORMED_RESPONSE');
     expect(isProviderError(error) && error.retryable).toBe(false);
+  });
+
+  it('corpo ilegível com status de ERRO é retentável', async () => {
+    // Página de gateway em HTML: a requisição nem chegou a ser processada.
+    for (const status of [502, 503, 504]) {
+      const { fetchImpl } = fakeGraph([{ status, raw: '<html>502 Bad Gateway</html>' }]);
+      const error = await client(fetchImpl)
+        .request({ method: 'GET', path: '1', operation: 'test' })
+        .catch((caught: unknown) => caught);
+
+      expect(isProviderError(error) && error.kind, `status ${status}`).toBe('MALFORMED_RESPONSE');
+      expect(isProviderError(error) && error.retryable, `status ${status}`).toBe(true);
+    }
   });
 
   it('nunca inclui o token na mensagem de erro', async () => {
