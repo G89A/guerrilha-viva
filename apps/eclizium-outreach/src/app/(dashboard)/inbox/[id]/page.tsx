@@ -7,7 +7,12 @@ import { MessageThread } from '@/components/inbox/message-thread';
 import { ReplyComposer } from '@/components/inbox/reply-composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { getConversationDetail } from '@/features/messaging/inbox-query';
+import { assignableMembers, getConversationDetail } from '@/features/messaging/inbox-query';
+import { listQuickReplies } from '@/features/messaging/quick-reply-service';
+import { AssignControl } from '@/components/inbox/assign-control';
+import { NotesPanel } from '@/components/inbox/notes-panel';
+import { prisma } from '@/lib/db/client';
+import { MessageDirection } from '@prisma/client';
 import { serviceWindow } from '@/features/messaging/conversation-service';
 import { requireWorkspace } from '@/lib/auth/guards';
 import { hasAtLeastRole, WorkspaceRole } from '@/lib/auth/roles';
@@ -28,6 +33,20 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
   // Escopada ao workspace: o id de outro tenant simplesmente não existe.
   const conversation = await getConversationDetail(context.workspace.id, id);
   if (!conversation) notFound();
+
+  const [members, quickReplies, unconfirmedInbound] = await Promise.all([
+    assignableMembers(context.workspace.id),
+    listQuickReplies(context.workspace.id),
+    prisma.message.count({
+      where: {
+        workspaceId: context.workspace.id,
+        conversationId: conversation.id,
+        direction: MessageDirection.INBOUND,
+        providerMessageId: { not: null },
+        readReceiptAt: null,
+      },
+    }),
+  ]);
 
   const window = serviceWindow(conversation.lastInboundAt);
   const canReply = hasAtLeastRole(context.role, WorkspaceRole.MEMBER);
@@ -60,16 +79,27 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
               {STATUS_LABELS[conversation.status]}
             </Badge>
 
+            <AssignControl
+              conversationId={conversation.id}
+              assigneeId={conversation.assigneeId}
+              members={members}
+            />
+
             <ConversationActions
               conversationId={conversation.id}
               status={conversation.status}
               unreadCount={conversation.unreadCount}
+              hasUnconfirmedInbound={unconfirmedInbound > 0}
             />
           </div>
         </header>
 
         <div className="flex-1 overflow-y-auto bg-muted/30">
-          <MessageThread messages={conversation.messages} />
+          <MessageThread
+            conversationId={conversation.id}
+            messages={conversation.messages}
+            olderCursor={conversation.olderCursor}
+          />
         </div>
 
         <ReplyComposer
@@ -77,6 +107,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
           windowOpen={window.open}
           windowExpiresAt={window.expiresAt}
           canReply={canReply}
+          quickReplies={quickReplies}
         />
       </div>
 
@@ -88,6 +119,8 @@ export default async function ConversationPage({ params }: { params: Promise<{ i
           consents={conversation.contact.consents}
           suppressed={conversation.contact.suppressions.length > 0}
         />
+
+        <NotesPanel conversationId={conversation.id} notes={conversation.notes} />
       </aside>
     </div>
   );

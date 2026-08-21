@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ConversationStatus } from '@prisma/client';
 import { Button } from '@/components/ui/button';
-import { markReadAction, setStatusAction } from '@/app/(dashboard)/inbox/actions';
+import { confirmReadAction, markReadAction, setStatusAction } from '@/app/(dashboard)/inbox/actions';
 
 /**
  * Ações do cabeçalho da conversa.
@@ -18,20 +18,28 @@ export function ConversationActions({
   conversationId,
   status,
   unreadCount,
+  hasUnconfirmedInbound,
 }: {
   conversationId: string;
   status: ConversationStatus;
   unreadCount: number;
+  /** Há mensagem recebida sem confirmação de leitura enviada à Meta. */
+  hasUnconfirmedInbound: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState<'read' | 'status' | null>(null);
+  const [running, setRunning] = useState<'read' | 'status' | 'confirm' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  function run(kind: 'read' | 'status', operation: () => Promise<{ ok: boolean; error?: { message: string } }>) {
+  function run(
+    kind: 'read' | 'status' | 'confirm',
+    operation: () => Promise<{ ok: boolean; error?: { message: string } }>,
+  ) {
     if (pending || running) return;
     setRunning(kind);
     setError(null);
+    setNotice(null);
 
     void operation()
       .then((result) => {
@@ -66,6 +74,31 @@ export function ConversationActions({
           </Button>
         ) : null}
 
+        {hasUnconfirmedInbound ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            title="Envia confirmação de leitura ao WhatsApp — o contato vê o tique azul."
+            onClick={() =>
+              run('confirm', async () => {
+                const data = new FormData();
+                data.set('conversationId', conversationId);
+                const result = await confirmReadAction(data);
+                if (result.ok && 'blocked' in result.data) {
+                  setNotice(result.data.blocked);
+                  return { ok: true };
+                }
+                if (result.ok) setNotice('Leitura confirmada no WhatsApp.');
+                return result;
+              })
+            }
+          >
+            {running === 'confirm' ? 'Confirmando…' : 'Confirmar leitura no WhatsApp'}
+          </Button>
+        ) : null}
+
         <Button
           type="button"
           variant="ghost"
@@ -89,6 +122,7 @@ export function ConversationActions({
       </div>
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
     </div>
   );
 }
