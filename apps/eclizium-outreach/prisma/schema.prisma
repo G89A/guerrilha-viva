@@ -39,6 +39,7 @@ model User {
   members      WorkspaceMember[]
   auditLogs    AuditLog[]
   suppressions SuppressionEntry[]
+  messages     Message[]
 
   @@map("users")
 }
@@ -332,29 +333,74 @@ model SuppressionEntry {
 // ---------------------------------------------------------------------------
 
 enum ChannelProvider {
-  META_WHATSAPP
+  META
+}
+
+/// Canal dentro do provider. Hoje só WhatsApp; o enum existe para que um
+/// segundo canal não exija reescrever o modelo.
+enum ChannelKind {
+  WHATSAPP
+}
+
+/// De onde o access token é lido em tempo de execução (ver ADR 0011).
+enum CredentialSource {
+  /// `META_ACCESS_TOKEN` do ambiente — deploy de um único tenant.
+  ENVIRONMENT
+  /// Cifrado em repouso no banco, por workspace.
+  ENCRYPTED
+}
+
+enum ChannelEnvironment {
+  TEST
+  PRODUCTION
 }
 
 enum ChannelStatus {
+  /// Faltam credenciais ou identificadores.
   NOT_CONFIGURED
+  /// Verificado contra a Graph API e funcionando.
   CONNECTED
-  DISABLED
+  /// Credencial recusada pela Meta (token inválido, expirado, sem permissão).
+  INVALID
+  /// Desligado deliberadamente por um administrador.
+  DISCONNECTED
+  /// Falha inesperada na última verificação.
   ERROR
 }
 
 model MessagingChannel {
-  id             String          @id @default(cuid())
-  workspaceId    String          @map("workspace_id")
-  provider       ChannelProvider @default(META_WHATSAPP)
-  status         ChannelStatus   @default(NOT_CONFIGURED)
-  displayName    String          @map("display_name")
-  phoneNumberId  String?         @map("phone_number_id")
-  wabaId         String?         @map("waba_id")
-  phoneE164      String?         @map("phone_e164")
-  lastError      String?         @map("last_error")
-  lastVerifiedAt DateTime?       @map("last_verified_at")
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @updatedAt @map("updated_at")
+  id          String             @id @default(cuid())
+  workspaceId String             @map("workspace_id")
+  provider    ChannelProvider    @default(META)
+  channel     ChannelKind        @default(WHATSAPP)
+  status      ChannelStatus      @default(NOT_CONFIGURED)
+  environment ChannelEnvironment @default(TEST)
+  displayName String             @map("display_name")
+
+  /// Identificadores da Meta. São dados de administração, não segredos.
+  wabaId             String? @map("waba_id")
+  phoneNumberId      String? @map("phone_number_id")
+  displayPhoneNumber String? @map("display_phone_number")
+  verifiedName       String? @map("verified_name")
+  phoneE164          String? @map("phone_e164")
+
+  /// Versão da Graph API usada por este canal. Configurável por workspace para
+  /// que uma migração de versão não seja um big bang.
+  graphApiVersion String @default("v21.0") @map("graph_api_version")
+
+  credentialSource  CredentialSource @default(ENVIRONMENT) @map("credential_source")
+  /// AES-256-GCM. Só é preenchido quando credentialSource = ENCRYPTED.
+  accessTokenCipher String?          @map("access_token_cipher")
+  /// Prefixo/sufixo mascarado + hash curto, para o operador reconhecer qual
+  /// token está em uso sem que o valor exista fora do servidor.
+  tokenFingerprint  String?          @map("token_fingerprint")
+
+  lastError      String?   @map("last_error")
+  lastErrorCode  String?   @map("last_error_code")
+  connectedAt    DateTime? @map("connected_at")
+  lastVerifiedAt DateTime? @map("last_verified_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   templates     MessageTemplate[]
@@ -362,11 +408,17 @@ model MessagingChannel {
   conversations Conversation[]
   messages      Message[]
 
-  @@unique([workspaceId, provider, phoneNumberId])
+  /// Um canal por (workspace, provider, tipo de canal): a integração pertence
+  /// ao workspace e não pode ser compartilhada.
+  @@unique([workspaceId, provider, channel])
+  @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("messaging_channels")
 }
 
+/// Status NORMALIZADO. O valor bruto do provider fica em
+/// `MessageTemplate.providerStatus`, para que um estado novo da Meta caia em
+/// UNKNOWN sem quebrar a aplicação, sem perder a informação original.
 enum TemplateStatus {
   UNKNOWN
   PENDING
@@ -374,6 +426,23 @@ enum TemplateStatus {
   REJECTED
   PAUSED
   DISABLED
+}
+
+/// Um template que sumiu da Meta não é apagado: ele deixa de estar disponível
+/// e o histórico local sobrevive (ver ADR 0013).
+enum TemplateAvailability {
+  AVAILABLE
+  UNAVAILABLE
+}
+
+/// Formato do cabeçalho, quando o template tem um.
+enum TemplateHeaderFormat {
+  TEXT
+  IMAGE
+  VIDEO
+  DOCUMENT
+  LOCATION
+  UNKNOWN
 }
 
 enum TemplateCategory {
@@ -386,29 +455,58 @@ enum TemplateCategory {
 /// Mirrors provider-owned template state. `status` is only ever written from a
 /// provider response — never set locally (see docs/adr/0005).
 model MessageTemplate {
-  id                 String           @id @default(cuid())
-  workspaceId        String           @map("workspace_id")
-  channelId          String           @map("channel_id")
-  providerTemplateId String?          @map("provider_template_id")
-  name               String
-  language           String
-  category           TemplateCategory @default(UNKNOWN)
-  status             TemplateStatus   @default(UNKNOWN)
-  body               String
-  components         Json             @default("[]")
-  variableCount      Int              @default(0) @map("variable_count")
-  rejectedReason     String?          @map("rejected_reason")
-  syncedAt           DateTime?        @map("synced_at")
-  createdAt          DateTime         @default(now()) @map("created_at")
-  updatedAt          DateTime         @updatedAt @map("updated_at")
+  id          String          @id @default(cuid())
+  workspaceId String          @map("workspace_id")
+  channelId   String          @map("channel_id")
+  provider    ChannelProvider @default(META)
+
+  /// Id do template na Meta. Chave de reconciliação da sincronização.
+  providerTemplateId String? @map("provider_template_id")
+
+  name     String
+  language String
+
+  category         TemplateCategory @default(UNKNOWN)
+  status           TemplateStatus   @default(UNKNOWN)
+  /// Valores exatamente como vieram da Meta, sem normalização.
+  providerStatus   String?          @map("provider_status")
+  providerCategory String?          @map("provider_category")
+
+  headerFormat TemplateHeaderFormat? @map("header_format")
+  headerText   String?               @map("header_text")
+  body         String
+  footerText   String?               @map("footer_text")
+  /// Botões normalizados: [{ type, text, url?, phoneNumber? }].
+  buttons      Json                  @default("[]")
+  /// Componentes crus da Meta, preservados para renderização futura.
+  components   Json                  @default("[]")
+
+  /// Placeholders detectados no corpo/cabeçalho: [{ key: "1", component: "body" }].
+  variables     Json @default("[]")
+  variableCount Int  @default(0) @map("variable_count")
+
+  qualityScore      String?   @map("quality_score")
+  rejectedReason    String?   @map("rejected_reason")
+  providerCreatedAt DateTime? @map("provider_created_at")
+
+  availability     TemplateAvailability @default(AVAILABLE)
+  unavailableSince DateTime?            @map("unavailable_since")
+
+  syncedAt  DateTime? @map("synced_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  channel   MessagingChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel   MessagingChannel @relation(fields: [workspaceId, channelId], references: [workspaceId, id], onDelete: Cascade)
   campaigns Campaign[]
   messages  Message[]
 
+  /// Idempotência da sincronização: rodar duas vezes não duplica.
+  @@unique([workspaceId, provider, providerTemplateId])
   @@unique([channelId, name, language])
+  @@unique([workspaceId, id])
   @@index([workspaceId, status])
+  @@index([workspaceId, availability])
   @@map("message_templates")
 }
 
@@ -545,6 +643,9 @@ enum MessageDirection {
 
 enum MessageStatus {
   QUEUED
+  /// Persistido ANTES da chamada ao provider. Se o processo morrer no meio, a
+  /// tentativa fica visível em vez de desaparecer.
+  SENDING
   SENT
   DELIVERED
   READ
@@ -579,7 +680,15 @@ model Message {
   type              MessageType      @default(TEXT)
   status            MessageStatus    @default(QUEUED)
   body              String?
+  /// Texto final, com as variáveis já substituídas — o que foi realmente
+  /// enviado, e não o template.
+  renderedContent   String?          @map("rendered_content")
   payload           Json             @default("{}")
+  createdById       String?          @map("created_by_id")
+  /// Chave de idempotência do envio. Duas submissões concorrentes da mesma
+  /// intenção colidem na unique abaixo — a segunda perde no banco, não em uma
+  /// checagem de leitura sujeita a corrida.
+  idempotencyKey    String?          @map("idempotency_key")
   /// Provider-assigned id (e.g. Meta `wamid.*`). Unique per workspace so
   /// duplicated webhook deliveries cannot create a second row.
   providerMessageId String?          @map("provider_message_id")
@@ -599,8 +708,10 @@ model Message {
   campaign     Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   recipient    CampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   template     MessageTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  createdBy    User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, providerMessageId])
+  @@unique([workspaceId, idempotencyKey])
   @@index([conversationId, createdAt])
   @@index([workspaceId, status])
   @@index([campaignId, status])
@@ -623,7 +734,7 @@ enum WebhookEventStatus {
 model WebhookEvent {
   id              String             @id @default(cuid())
   workspaceId     String?            @map("workspace_id")
-  provider        ChannelProvider    @default(META_WHATSAPP)
+  provider        ChannelProvider    @default(META)
   providerEventId String             @map("provider_event_id")
   eventType       String?            @map("event_type")
   status          WebhookEventStatus @default(RECEIVED)
