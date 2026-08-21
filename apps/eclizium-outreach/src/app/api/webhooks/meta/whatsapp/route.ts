@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { logger } from '@/lib/logging/logger';
 import { MAX_WEBHOOK_BYTES, parseWebhookPayload } from '@/features/webhooks/parser';
 import { SIGNATURE_HEADER, verifyChallenge, verifySignature } from '@/features/webhooks/signature';
-import { handleEvent } from '@/features/webhooks/processor';
+import { ingestEvent } from '@/features/webhooks/processor';
 
 /**
  * Webhook da Meta WhatsApp Business Cloud API.
@@ -88,16 +88,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: parsed.reason }, { status: 400, headers: NO_STORE });
   }
 
-  const results = { processed: 0, duplicate: 0, ignored: 0, failed: 0 };
+  const results = { queued: 0, duplicate: 0, ignored: 0, failed: 0 };
 
   // Cada evento é independente: a falha de um não impede os demais.
+  //
+  // Aqui a requisição só persiste e enfileira. O efeito é aplicado pelo worker,
+  // que é quem pode retentar com backoff — dentro do handler não haveria tempo
+  // nem segunda chance.
   for (const event of parsed.events) {
     try {
-      const outcome = await handleEvent(event, { signatureValid: true });
-      if (outcome.result === 'PROCESSED') results.processed += 1;
+      const outcome = await ingestEvent(event, { signatureValid: true });
+      if (outcome.result === 'QUEUED') results.queued += 1;
       else if (outcome.result === 'DUPLICATE') results.duplicate += 1;
-      else if (outcome.result === 'IGNORED') results.ignored += 1;
-      else results.failed += 1;
+      else results.ignored += 1;
     } catch (error) {
       results.failed += 1;
       logger.error('webhook.event_crashed', { provider: 'META', eventType: event.kind, error });
@@ -111,8 +114,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     durationMs: Date.now() - startedAt,
   });
 
-  // 200 mesmo com falhas de processamento: o evento já está durável e é
-  // reprocessável. Devolver erro faria a Meta reentregar a mesma carga em laço,
+  // 200 mesmo com falhas de ingestão: o que deu certo já está durável e
+  // enfileirado. Devolver erro faria a Meta reentregar a carga inteira em laço,
   // sem consertar a causa.
   return NextResponse.json({ received: parsed.events.length, ...results }, {
     status: 200,

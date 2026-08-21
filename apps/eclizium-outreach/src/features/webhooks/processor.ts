@@ -1,6 +1,13 @@
 import 'server-only';
 import type { MessagingChannel } from '@prisma/client';
-import { ChannelKind, ChannelProvider, MessageDirection, Prisma } from '@prisma/client';
+import {
+  ChannelKind,
+  ChannelProvider,
+  JobType,
+  MessageDirection,
+  Prisma,
+  WebhookEventStatus,
+} from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import { logger } from '@/lib/logging/logger';
 import { writeAuditLog, type AuditAction } from '@/lib/audit/audit-log';
@@ -12,15 +19,23 @@ import {
 import { processInboundMessage } from '@/features/messaging/inbound-service';
 import { registerOutbound } from '@/features/messaging/conversation-service';
 import type { ParsedEvent, StatusEvent } from '@/features/webhooks/parser';
-import { markFailed, markIgnored, markProcessed, markProcessing, storeEvent } from '@/features/webhooks/event-store';
+import {
+  claimEvent,
+  markFailed,
+  markIgnored,
+  markProcessed,
+  storeEvent,
+} from '@/features/webhooks/event-store';
+import { deserializeEvent } from '@/features/webhooks/event-codec';
+import { enqueueJob, resetJobForRetry } from '@/features/queue/job-store';
 
 /**
  * Processamento de um evento de webhook.
  *
- * Estrutura deliberada: RECEIVE → VALIDATE → PERSIST → PROCESS. Hoje o PROCESS
- * roda dentro da requisição; a separação existe para que ele possa virar um
- * worker no Sprint 5 sem reescrever nada — o evento já está durável e tem
- * estado próprio.
+ * Estrutura: RECEIVE → VALIDATE → PERSIST → ENQUEUE, e o PROCESS acontece no
+ * worker (Sprint 6). A rota devolve 200 assim que o evento está durável e
+ * enfileirado; uma rajada da Meta não ocupa mais o handler, e um erro de
+ * processamento vira retentativa com backoff em vez de evento perdido.
  *
  * Cada evento é independente: uma falha em um não impede os outros da mesma
  * entrega.
@@ -53,10 +68,35 @@ export async function resolveChannel(
   });
 }
 
-export async function handleEvent(
+export type IngestOutcome =
+  | { result: 'QUEUED'; eventId: string }
+  | { result: 'DUPLICATE'; eventId: string }
+  | { result: 'IGNORED'; eventId: string; detail: string };
+
+/** Chave determinística do job: um evento gera no máximo um job. */
+export function webhookJobKey(eventId: string): string {
+  return `webhook-event:${eventId}`;
+}
+
+/**
+ * Prioridade acima do disparo de campanha.
+ *
+ * Uma mensagem recebida é alguém esperando resposta; uma campanha de dez mil
+ * envios pode esperar alguns segundos. Sem isso, um disparo grande empurraria
+ * toda a Inbox para o fim da fila.
+ */
+export const WEBHOOK_JOB_PRIORITY = 10;
+
+/**
+ * Recebe o evento: resolve o tenant, persiste e enfileira. Não aplica efeito.
+ *
+ * O que decide o workspace é o `phone_number_id` da metadata, resolvido contra
+ * os canais cadastrados. Nenhum identificador vindo do payload é aceito.
+ */
+export async function ingestEvent(
   parsed: ParsedEvent,
   context: { signatureValid: boolean },
-): Promise<ProcessOutcome> {
+): Promise<IngestOutcome> {
   const channel = await resolveChannel(parsed.metadata.phoneNumberId);
 
   const stored = await storeEvent(parsed, {
@@ -64,14 +104,15 @@ export async function handleEvent(
     signatureValid: context.signatureValid,
   });
 
-  // Entrega repetida: o evento já existe. Nenhum efeito é reaplicado.
+  // Entrega repetida: o evento já existe. Nenhum efeito é reaplicado e nenhum
+  // job novo é criado.
   if (!stored.isNew) {
     logger.info('webhook.duplicate_ignored', {
       provider: 'META',
       eventType: parsed.kind,
       eventId: stored.event.id,
     });
-    return { result: 'DUPLICATE', detail: 'Evento já recebido anteriormente.' };
+    return { result: 'DUPLICATE', eventId: stored.event.id };
   }
 
   if (!channel) {
@@ -83,10 +124,101 @@ export async function handleEvent(
       eventType: parsed.kind,
       phoneNumberSuffix: parsed.metadata.phoneNumberId?.slice(-4) ?? null,
     });
+    return { result: 'IGNORED', eventId: stored.event.id, detail: 'Canal desconhecido.' };
+  }
+
+  await enqueueJob({
+    workspaceId: channel.workspaceId,
+    type: JobType.WEBHOOK_EVENT,
+    idempotencyKey: webhookJobKey(stored.event.id),
+    payload: { eventId: stored.event.id },
+    priority: WEBHOOK_JOB_PRIORITY,
+  });
+
+  return { result: 'QUEUED', eventId: stored.event.id };
+}
+
+/**
+ * Reenfileira um evento para processamento.
+ *
+ * Usado pelo reprocessamento manual. Deliberadamente NÃO processa em linha: há
+ * um caminho de processamento só — o worker — e mantê-lo único é o que garante
+ * que reprocessar pela tela se comporte igual ao processamento normal.
+ */
+export async function requeueEvent(
+  workspaceId: string,
+  eventId: string,
+): Promise<{ requeued: boolean; reason?: string }> {
+  const event = await prisma.webhookEvent.findFirst({
+    where: { id: eventId, workspaceId },
+    select: { id: true, status: true },
+  });
+  if (!event) return { requeued: false, reason: 'Evento não encontrado neste workspace.' };
+
+  if (
+    event.status === WebhookEventStatus.PROCESSED ||
+    event.status === WebhookEventStatus.IGNORED
+  ) {
+    return { requeued: false, reason: 'Evento já concluído; reprocessar não teria efeito.' };
+  }
+
+  // O job anterior pode ter morrido na carta morta. Reativá-lo em uma instrução
+  // é o caminho seguro: apagar para recriar abre corrida entre dois pedidos de
+  // reprocessamento simultâneos.
+  const revived = await resetJobForRetry({
+    idempotencyKey: webhookJobKey(eventId),
+    priority: WEBHOOK_JOB_PRIORITY,
+  });
+
+  if (!revived) {
+    await enqueueJob({
+      workspaceId,
+      type: JobType.WEBHOOK_EVENT,
+      idempotencyKey: webhookJobKey(eventId),
+      payload: { eventId },
+      priority: WEBHOOK_JOB_PRIORITY,
+    });
+  }
+
+  return { requeued: true };
+}
+
+/**
+ * Aplica o efeito de um evento já persistido. É o ÚNICO caminho de
+ * processamento — worker e reprocessamento manual passam por aqui.
+ */
+export async function processStoredEvent(eventId: string): Promise<ProcessOutcome> {
+  const event = await prisma.webhookEvent.findUnique({ where: { id: eventId } });
+  if (!event) return { result: 'IGNORED', detail: 'Evento não existe mais.' };
+
+  // Compare-and-set: PROCESSED e IGNORED são terminais. Um job reentregue
+  // depois do evento já concluído não reaplica nada.
+  const claimed = await claimEvent(event.id);
+  if (!claimed) {
+    return { result: 'DUPLICATE', detail: `Evento já em estado ${event.status}.` };
+  }
+
+  const parsed = deserializeEvent(event.eventType, event.payload);
+  if (!parsed) {
+    // Payload que não sabemos reconstruir não melhora com retentativa.
+    await markIgnored(event.id, 'Payload gravado não pôde ser reconstruído.');
+    return { result: 'IGNORED', detail: 'Payload irreconstruível.' };
+  }
+
+  const channel = await resolveChannel(parsed.metadata.phoneNumberId);
+
+  if (!channel) {
+    await markIgnored(event.id, 'Nenhum canal corresponde ao phone_number_id.');
     return { result: 'IGNORED', detail: 'Canal desconhecido.' };
   }
 
-  await markProcessing(stored.event.id);
+  // O canal pode ter sido movido de workspace entre a recepção e o
+  // processamento. Aplicar o efeito no tenant errado seria pior que ignorar.
+  if (event.workspaceId && event.workspaceId !== channel.workspaceId) {
+    await markIgnored(event.id, 'Canal pertence a outro workspace agora.');
+    logger.warn('webhook.workspace_mismatch', { eventId: event.id });
+    return { result: 'IGNORED', detail: 'Canal mudou de workspace.' };
+  }
 
   try {
     const outcome =
@@ -97,34 +229,36 @@ export async function handleEvent(
           : ({ result: 'IGNORED', detail: parsed.description } as const);
 
     if (outcome.result === 'IGNORED') {
-      await markIgnored(stored.event.id, outcome.detail);
+      await markIgnored(event.id, outcome.detail);
     } else {
-      await markProcessed(stored.event.id);
+      await markProcessed(event.id);
     }
 
     return outcome;
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Falha desconhecida';
-    await markFailed(stored.event.id, detail);
+    await markFailed(event.id, detail);
 
     logger.error('webhook.processing_failed', {
       workspaceId: channel.workspaceId,
       eventType: parsed.kind,
-      eventId: stored.event.id,
+      eventId: event.id,
       error,
     });
 
     await writeAuditLog({
       action: 'webhook.failed',
       resourceType: 'WebhookEvent',
-      resourceId: stored.event.id,
+      resourceId: event.id,
       workspaceId: channel.workspaceId,
       actorUserId: null,
       actorType: 'SYSTEM',
       metadata: { eventType: parsed.kind },
     });
 
-    return { result: 'FAILED', detail };
+    // Relança para o worker classificar e reagendar: engolir aqui faria o job
+    // ser dado como concluído e o evento nunca mais seria tentado.
+    throw error;
   }
 }
 

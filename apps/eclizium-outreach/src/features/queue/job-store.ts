@@ -282,3 +282,57 @@ export async function queueDepth(
   for (const row of grouped) depth[field[row.status]] = row._count._all;
   return depth;
 }
+
+/**
+ * Recoloca um job existente na fila, zerando as tentativas.
+ *
+ * Usado pelo reprocessamento manual. Apagar e recriar seria a forma óbvia — e
+ * é uma corrida: dois pedidos simultâneos fazem o `delete` de um engolir o job
+ * que o outro acabou de inserir, e a leitura seguinte não acha nada. Aqui não
+ * há delete: ou o `updateMany` encontra o job e o reativa, ou não encontra e
+ * quem chamou cria com `ON CONFLICT DO NOTHING`.
+ *
+ * Devolve `false` quando não havia job com essa chave.
+ */
+export async function resetJobForRetry(input: {
+  idempotencyKey: string;
+  runAt?: Date;
+  priority?: number;
+}): Promise<boolean> {
+  const result = await prisma.job.updateMany({
+    where: { idempotencyKey: input.idempotencyKey },
+    data: {
+      status: JobStatus.PENDING,
+      attempts: 0,
+      runAt: input.runAt ?? new Date(),
+      leasedBy: null,
+      leasedUntil: null,
+      lastError: null,
+      lastErrorCode: null,
+      completedAt: null,
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
+    },
+  });
+  return result.count > 0;
+}
+
+/** Idade a partir da qual um job concluído não serve mais para diagnóstico. */
+export const COMPLETED_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Apaga jobs concluídos antigos.
+ *
+ * `completeJob` marca DONE em vez de apagar, para que o histórico recente seja
+ * inspecionável. Só que desde a Sprint 6 há um job por evento de webhook, e sem
+ * poda a tabela cresce para sempre. Jobs em carta morta (`DEAD`) NÃO são
+ * apagados: são justamente os que alguém precisa ver.
+ */
+export async function pruneCompletedJobs(input: { now?: Date; ttlMs?: number } = {}): Promise<number> {
+  const now = input.now ?? new Date();
+  const cutoff = new Date(now.getTime() - (input.ttlMs ?? COMPLETED_JOB_TTL_MS));
+
+  const result = await prisma.job.deleteMany({
+    where: { status: JobStatus.DONE, completedAt: { lt: cutoff } },
+  });
+  return result.count;
+}

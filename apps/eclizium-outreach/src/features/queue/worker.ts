@@ -7,8 +7,10 @@ import {
   failJob,
   leaseJobs,
   LEASE_DURATION_MS,
+  pruneCompletedJobs,
 } from '@/features/queue/job-store';
 import { processSendJob, type ProcessOptions } from '@/features/campaigns/send-worker';
+import { processStoredEvent } from '@/features/webhooks/processor';
 import { reconcileCampaignMetrics } from '@/features/campaigns/metrics';
 import { prisma } from '@/lib/db/client';
 import { CampaignStatus, RecipientStatus } from '@prisma/client';
@@ -28,6 +30,8 @@ export interface TickOptions {
   workerId?: string;
   batchSize?: number;
   workspaceId?: string;
+  /** Restringe o ciclo a um tipo de job. Sem isso, drena todos. */
+  type?: JobType;
   now?: Date;
   processOptions?: ProcessOptions;
 }
@@ -39,10 +43,22 @@ export interface TickResult {
   rateLimited: number;
   failed: number;
   dead: number;
+  /** Eventos de webhook aplicados neste ciclo. */
+  webhooks: number;
   durationMs: number;
 }
 
 export const DEFAULT_BATCH_SIZE = 25;
+
+/**
+ * Intervalo mínimo entre podas de jobs concluídos.
+ *
+ * A poda roda só em ciclo ocioso: quando há trabalho, o worker trabalha. O
+ * contador é por processo — em serverless cada instância poda no seu ritmo, e
+ * podar duas vezes não faz mal nenhum.
+ */
+const PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+let lastPruneAt = 0;
 
 export function newWorkerId(): string {
   return `worker-${randomUUID().slice(0, 8)}`;
@@ -53,10 +69,13 @@ export async function runWorkerTick(options: TickOptions = {}): Promise<TickResu
   const workerId = options.workerId ?? newWorkerId();
   const now = options.now ?? new Date();
 
+  // Sem filtro de tipo: o mesmo ciclo drena envio de campanha e evento de
+  // webhook. A ordenação por prioridade é o que mantém a Inbox à frente de um
+  // disparo grande.
   const jobs = await leaseJobs({
     workerId,
     limit: options.batchSize ?? DEFAULT_BATCH_SIZE,
-    type: JobType.CAMPAIGN_SEND,
+    ...(options.type ? { type: options.type } : {}),
     ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
     now,
     leaseDurationMs: LEASE_DURATION_MS,
@@ -69,6 +88,7 @@ export async function runWorkerTick(options: TickOptions = {}): Promise<TickResu
     rateLimited: 0,
     failed: 0,
     dead: 0,
+    webhooks: 0,
     durationMs: 0,
   };
 
@@ -76,6 +96,13 @@ export async function runWorkerTick(options: TickOptions = {}): Promise<TickResu
 
   for (const job of jobs) {
     try {
+      if (job.type === JobType.WEBHOOK_EVENT) {
+        await processWebhookJob(job);
+        await completeJob(job.id);
+        result.webhooks += 1;
+        continue;
+      }
+
       const outcome = await processSendJob(job, options.processOptions ?? {});
 
       if (outcome.result === 'SENT') {
@@ -141,6 +168,14 @@ export async function runWorkerTick(options: TickOptions = {}): Promise<TickResu
     await completeCampaignIfDrained(workspaceId, campaignId);
   }
 
+  // Ciclo ocioso é a hora de limpar: sem trabalho na fila, uma varredura não
+  // atrasa envio nenhum.
+  if (jobs.length === 0 && Date.now() - lastPruneAt > PRUNE_INTERVAL_MS) {
+    lastPruneAt = Date.now();
+    const pruned = await pruneCompletedJobs({ now });
+    if (pruned > 0) logger.info('queue.pruned', { workerId, pruned });
+  }
+
   result.durationMs = Date.now() - startedAt;
 
   if (jobs.length > 0) {
@@ -195,7 +230,8 @@ export async function drainQueue(
 ): Promise<TickResult> {
   const maxTicks = options.maxTicks ?? 100;
   const total: TickResult = {
-    leased: 0, sent: 0, skipped: 0, rateLimited: 0, failed: 0, dead: 0, durationMs: 0,
+    leased: 0, sent: 0, skipped: 0, rateLimited: 0, failed: 0, dead: 0, webhooks: 0,
+    durationMs: 0,
   };
   const startedAt = Date.now();
 
@@ -207,6 +243,7 @@ export async function drainQueue(
     total.rateLimited += result.rateLimited;
     total.failed += result.failed;
     total.dead += result.dead;
+    total.webhooks += result.webhooks;
 
     // Só sobraram jobs esperando vazão: insistir agora não adianta.
     if (result.leased === 0) break;
@@ -215,4 +252,21 @@ export async function drainQueue(
 
   total.durationMs = Date.now() - startedAt;
   return total;
+}
+
+/**
+ * Aplica um evento de webhook já persistido.
+ *
+ * O payload carrega só o id do evento: a verdade está na tabela, e é relida
+ * aqui. Uma exceção sobe para o ciclo, que classifica como retentável — evento
+ * de webhook falha por causa transitória com frequência (banco ocupado, corrida
+ * com um contato recém-criado), e desistir na primeira perderia a mensagem.
+ */
+async function processWebhookJob(job: { id: string; payload: unknown }): Promise<void> {
+  const eventId = (job.payload as { eventId?: unknown })?.eventId;
+  if (typeof eventId !== 'string' || eventId.length === 0) {
+    throw new Error('Job de webhook sem eventId.');
+  }
+
+  await processStoredEvent(eventId);
 }
