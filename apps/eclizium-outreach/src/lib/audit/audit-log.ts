@@ -41,7 +41,19 @@ export type AuditAction =
   | 'messaging.templates_sync_failed'
   | 'messaging.test_message_attempted'
   | 'messaging.test_message_sent'
-  | 'messaging.test_message_failed';
+  | 'messaging.test_message_failed'
+  | 'webhook.received'
+  | 'webhook.processed'
+  | 'webhook.failed'
+  | 'message.inbound_received'
+  | 'message.status_sent'
+  | 'message.status_delivered'
+  | 'message.status_read'
+  | 'message.status_failed'
+  | 'message.reply_sent'
+  | 'conversation.created'
+  | 'conversation.read'
+  | 'conversation.status_changed';
 
 export interface WriteAuditLogInput {
   action: AuditAction;
