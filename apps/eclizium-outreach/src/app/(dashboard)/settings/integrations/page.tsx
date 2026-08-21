@@ -14,6 +14,8 @@ import { fingerprintSecret } from '@/lib/security/secret-box';
 import { requireWorkspace } from '@/lib/auth/guards';
 import { hasAtLeastRole, WorkspaceRole } from '@/lib/auth/roles';
 import { formatDateTime } from '@/lib/utils';
+import { WebhookEventsPanel } from '@/components/integrations/webhook-events-panel';
+import { listFailedEvents, webhookEventSummary } from '@/features/webhooks/event-query';
 
 export const metadata: Metadata = { title: 'Integrações' };
 export const dynamic = 'force-dynamic';
@@ -33,6 +35,11 @@ export default async function IntegrationsSettingsPage() {
 
   const canConfigure = hasAtLeastRole(context.role, WorkspaceRole.OWNER);
   const canOperate = hasAtLeastRole(context.role, WorkspaceRole.ADMIN);
+
+  const [webhookSummary, failedEvents] = await Promise.all([
+    webhookEventSummary(context.workspace.id),
+    listFailedEvents(context.workspace.id),
+  ]);
 
   const env = getMetaEnvState();
   const envFingerprint = env.configured ? fingerprintSecret(env.env.META_ACCESS_TOKEN) : null;
@@ -196,6 +203,12 @@ export default async function IntegrationsSettingsPage() {
           </p>
         </CardContent>
       </Card>
+      <WebhookEventsPanel
+        summary={webhookSummary}
+        failed={failedEvents}
+        canRequeue={canOperate}
+      />
+
     </div>
   );
 }

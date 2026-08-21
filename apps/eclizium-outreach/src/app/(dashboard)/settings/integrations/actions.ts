@@ -17,6 +17,9 @@ import {
 } from '@/features/messaging/channel-service';
 import { syncTemplates } from '@/features/messaging/template-sync';
 import { AppError } from '@/lib/errors/app-error';
+import { z } from 'zod';
+import { cuidSchema } from '@/lib/validation/common';
+import { requeueEvent } from '@/features/webhooks/processor';
 
 /**
  * Ações da integração Meta.
@@ -167,5 +170,40 @@ export async function disconnectIntegrationAction(): Promise<ActionResult<{ ok: 
 
     revalidatePath('/settings/integrations');
     return { ok: true as const };
+  });
+}
+
+const requeueSchema = z.object({ eventId: cuidSchema });
+
+/**
+ * Reenfileira um evento de webhook que falhou.
+ *
+ * Não reprocessa aqui: cria o job e deixa o worker aplicar, para que
+ * reprocessar pela tela siga exatamente o mesmo caminho do processamento
+ * normal — inclusive retentativa e carta morta.
+ */
+export async function requeueWebhookEventAction(
+  formData: FormData,
+): Promise<ActionResult<{ requeued: boolean; reason?: string }>> {
+  return runAction('webhook.requeue', async () => {
+    await assertSameOriginRequest();
+    const context = await requireWorkspaceRole(WorkspaceRole.ADMIN);
+    const input = parseOrThrow(requeueSchema, formDataToObject(formData));
+
+    const result = await requeueEvent(context.workspace.id, input.eventId);
+
+    if (result.requeued) {
+      await writeAuditLog({
+        action: 'webhook.requeued',
+        resourceType: 'WebhookEvent',
+        resourceId: input.eventId,
+        workspaceId: context.workspace.id,
+        actorUserId: context.user.id,
+        metadata: {},
+      });
+    }
+
+    revalidatePath('/settings/integrations');
+    return result.reason ? { requeued: false, reason: result.reason } : { requeued: true };
   });
 }
