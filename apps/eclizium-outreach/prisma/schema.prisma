@@ -40,6 +40,7 @@ model User {
   auditLogs    AuditLog[]
   suppressions SuppressionEntry[]
   messages     Message[]
+  campaigns    Campaign[]
 
   @@map("users")
 }
@@ -231,7 +232,6 @@ model ContactList {
 
   workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   members   ContactListMember[]
-  campaigns Campaign[]
 
   @@unique([workspaceId, name])
   @@unique([workspaceId, id])
@@ -514,49 +514,18 @@ model MessageTemplate {
 // Campaigns
 // ---------------------------------------------------------------------------
 
-enum CampaignStatus {
-  DRAFT
-  SCHEDULED
-  RUNNING
-  PAUSED
-  COMPLETED
-  CANCELLED
-  FAILED
-}
-
-model Campaign {
-  id            String         @id @default(cuid())
-  workspaceId   String         @map("workspace_id")
-  name          String
-  status        CampaignStatus @default(DRAFT)
-  channelId     String?        @map("channel_id")
-  templateId    String?        @map("template_id")
-  listId        String?        @map("list_id")
-  variableMap   Json           @default("{}") @map("variable_map")
-  scheduledAt   DateTime?      @map("scheduled_at")
-  startedAt     DateTime?      @map("started_at")
-  completedAt   DateTime?      @map("completed_at")
-  cancelledAt   DateTime?      @map("cancelled_at")
-  failureReason String?        @map("failure_reason")
-  createdById   String?        @map("created_by_id")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-
-  workspace  Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  channel    MessagingChannel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
-  template   MessageTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  list       ContactList?        @relation(fields: [listId], references: [id], onDelete: SetNull)
-  recipients CampaignRecipient[]
-  messages   Message[]
-
-  @@index([workspaceId, status])
-  @@index([workspaceId, scheduledAt])
-  @@map("campaigns")
-}
-
+/// Resultado da avaliação de elegibilidade, preservado mesmo depois que o
+/// `status` avança para SENT — é o que permite auditar por que alguém entrou.
 enum RecipientStatus {
   PENDING
   ELIGIBLE
+  /// Na lista de supressão. Separado de INELIGIBLE porque é o bloqueio de
+  /// compliance mais importante e precisa ser contado à parte.
+  SUPPRESSED
+  /// Telefone inválido — também contado à parte para o relatório.
+  INVALID
+  /// Bloqueado por outro motivo: sem consentimento, variável ausente,
+  /// template indisponível. O detalhe fica em `eligibilityReasons`.
   INELIGIBLE
   QUEUED
   SENDING
@@ -568,37 +537,148 @@ enum RecipientStatus {
   CANCELLED
 }
 
+enum RecipientEligibility {
+  NOT_EVALUATED
+  ELIGIBLE
+  BLOCKED
+}
+
+/// O que fazer quando uma variável obrigatória não tem valor para o contato.
+enum MissingVariablePolicy {
+  /// Padrão: o destinatário é bloqueado. Nunca se inventa conteúdo.
+  BLOCK_RECIPIENT
+  /// Usa o texto configurado explicitamente para aquela variável.
+  FALLBACK_VALUE
+}
+
+enum CampaignStatus {
+  DRAFT
+  /// Materializando a audiência. Estado transitório que impede duas
+  /// preparações simultâneas de correrem juntas.
+  PREPARING
+  /// Audiência materializada e avaliada; pronta para agendar ou iniciar.
+  READY
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+model Campaign {
+  id          String         @id @default(cuid())
+  workspaceId String         @map("workspace_id")
+  name        String
+  description String?
+  status      CampaignStatus @default(DRAFT)
+
+  channel    ChannelKind @default(WHATSAPP)
+  channelId  String?     @map("channel_id")
+  templateId String?     @map("template_id")
+
+  /// Definição da audiência: listas, tags, cidades, consentimento, etc.
+  /// É a ÚNICA fonte da seleção — não existe um `listId` paralelo que possa
+  /// divergir dela.
+  audienceFilters Json @default("{}") @map("audience_filters")
+
+  /// Mapeamento das variáveis do template: { "body:1": { source, value } }.
+  variableMap       Json                  @default("{}") @map("variable_map")
+  /// O que fazer quando falta valor. O padrão bloqueia — nunca inventa texto.
+  variablePolicy    MissingVariablePolicy @default(BLOCK_RECIPIENT) @map("variable_policy")
+  /// Textos de fallback por variável, usados só com FALLBACK_VALUE.
+  variableFallbacks Json                  @default("{}") @map("variable_fallbacks")
+
+  /// Instante do disparo, sempre em UTC. `timezone` guarda a zona que o
+  /// operador usou para escolher, para exibir de volta sem ambiguidade.
+  scheduledAt DateTime? @map("scheduled_at")
+  timezone    String    @default("UTC")
+
+  preparedAt  DateTime? @map("prepared_at")
+  startedAt   DateTime? @map("started_at")
+  pausedAt    DateTime? @map("paused_at")
+  completedAt DateTime? @map("completed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  /// Contadores desnormalizados: cache para a listagem. A VERDADE é a agregação
+  /// sobre campaign_recipients (ver ADR 0016); `reconcileMetrics` os recalcula.
+  totalRecipients      Int @default(0) @map("total_recipients")
+  eligibleRecipients   Int @default(0) @map("eligible_recipients")
+  suppressedRecipients Int @default(0) @map("suppressed_recipients")
+  invalidRecipients    Int @default(0) @map("invalid_recipients")
+
+  lastDryRunAt DateTime? @map("last_dry_run_at")
+
+  failureReason String?  @map("failure_reason")
+  createdById   String?  @map("created_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  workspace  Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channelRef MessagingChannel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  template   MessageTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  createdBy  User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  recipients CampaignRecipient[]
+  messages   Message[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@map("campaigns")
+}
+
 model CampaignRecipient {
-  id                String          @id @default(cuid())
-  workspaceId       String          @map("workspace_id")
-  campaignId        String          @map("campaign_id")
-  contactId         String          @map("contact_id")
-  status            RecipientStatus @default(PENDING)
+  id          String          @id @default(cuid())
+  workspaceId String          @map("workspace_id")
+  campaignId  String          @map("campaign_id")
+  contactId   String          @map("contact_id")
+  status      RecipientStatus @default(PENDING)
+
+  /// Resultado da avaliação, preservado mesmo depois que `status` avança.
+  eligibility        RecipientEligibility @default(NOT_EVALUATED)
+  /// Códigos do bloqueio: ["CONSENT_MISSING", "SUPPRESSED", …].
+  eligibilityReasons String[]             @default([]) @map("eligibility_reasons")
+
   /// Deterministic key (campaignId:contactId:stepId) that makes retries safe.
-  idempotencyKey    String          @map("idempotency_key")
-  ineligibleReasons String[]        @default([]) @map("ineligible_reasons")
-  variables         Json            @default("{}")
-  attemptCount      Int             @default(0) @map("attempt_count")
-  queuedAt          DateTime?       @map("queued_at")
-  sentAt            DateTime?       @map("sent_at")
-  deliveredAt       DateTime?       @map("delivered_at")
-  readAt            DateTime?       @map("read_at")
-  repliedAt         DateTime?       @map("replied_at")
-  failedAt          DateTime?       @map("failed_at")
-  failureCode       String?         @map("failure_code")
-  failureMessage    String?         @map("failure_message")
-  createdAt         DateTime        @default(now()) @map("created_at")
-  updatedAt         DateTime        @updatedAt @map("updated_at")
+  idempotencyKey String @map("idempotency_key")
+
+  /// Valores das variáveis já resolvidos para este contato.
+  variables       Json    @default("{}")
+  /// Texto final que este contato receberia — o que o preview mostra.
+  renderedPreview String? @map("rendered_preview")
+
+  attemptCount Int       @default(0) @map("attempt_count")
+  scheduledAt  DateTime? @map("scheduled_at")
+  queuedAt     DateTime? @map("queued_at")
+  sendingAt    DateTime? @map("sending_at")
+  sentAt       DateTime? @map("sent_at")
+  deliveredAt  DateTime? @map("delivered_at")
+  readAt       DateTime? @map("read_at")
+  repliedAt    DateTime? @map("replied_at")
+  failedAt     DateTime? @map("failed_at")
+  cancelledAt  DateTime? @map("cancelled_at")
+
+  /// `wamid` da mensagem enviada. Preenchido pela execução do Sprint 5.
+  providerMessageId String? @map("provider_message_id")
+  failureCode       String? @map("failure_code")
+  failureReason     String? @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   campaign  Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   messages  Message[]
 
+  /// Um contato não entra duas vezes na mesma campanha. Garantido no banco,
+  /// não apenas no serviço.
   @@unique([campaignId, contactId])
   @@unique([idempotencyKey])
   @@index([campaignId, status])
+  @@index([campaignId, eligibility])
   @@index([workspaceId, status])
+  @@index([contactId])
   @@map("campaign_recipients")
 }
 
