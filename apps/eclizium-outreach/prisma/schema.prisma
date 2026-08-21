@@ -35,12 +35,15 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  sessions     Session[]
-  members      WorkspaceMember[]
-  auditLogs    AuditLog[]
-  suppressions SuppressionEntry[]
-  messages     Message[]
-  campaigns    Campaign[]
+  sessions              Session[]
+  members               WorkspaceMember[]
+  auditLogs             AuditLog[]
+  suppressions          SuppressionEntry[]
+  messages              Message[]
+  campaigns             Campaign[]
+  assignedConversations Conversation[]     @relation("ConversationAssignee")
+  conversationNotes     ConversationNote[]
+  quickReplies          QuickReply[]
 
   @@map("users")
 }
@@ -96,6 +99,8 @@ model Workspace {
   campaignRecipients CampaignRecipient[]
   jobs               Job[]
   rateLimitBuckets   RateLimitBucket[]
+  conversationNotes  ConversationNote[]
+  quickReplies       QuickReply[]
 
   @@map("workspaces")
 }
@@ -710,17 +715,21 @@ model Conversation {
   unreadCount   Int                @default(0) @map("unread_count")
   lastMessageAt DateTime?          @map("last_message_at")
   lastInboundAt DateTime?          @map("last_inbound_at")
+  assignedAt    DateTime?          @map("assigned_at")
   closedAt      DateTime?          @map("closed_at")
   createdAt     DateTime           @default(now()) @map("created_at")
   updatedAt     DateTime           @updatedAt @map("updated_at")
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  channel   MessagingChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  contact   Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channel   MessagingChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact   Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignee  User?              @relation("ConversationAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   messages  Message[]
+  notes     ConversationNote[]
 
   @@unique([channelId, contactId])
   @@index([workspaceId, status, lastMessageAt])
+  @@index([workspaceId, assigneeId, status])
   @@map("conversations")
 }
 
@@ -797,12 +806,13 @@ model Message {
   mediaCaption  String?     @map("media_caption")
   mediaStatus   MediaStatus @default(NOT_APPLICABLE) @map("media_status")
 
-  sentAt      DateTime? @map("sent_at")
-  deliveredAt DateTime? @map("delivered_at")
-  readAt      DateTime? @map("read_at")
-  failedAt    DateTime? @map("failed_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  sentAt        DateTime? @map("sent_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  readAt        DateTime? @map("read_at")
+  readReceiptAt DateTime? @map("read_receipt_at")
+  failedAt      DateTime? @map("failed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   channel      MessagingChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -840,6 +850,7 @@ enum JobStatus {
 
 enum JobType {
   CAMPAIGN_SEND
+  WEBHOOK_EVENT
 }
 
 /// Item de trabalho durável.
@@ -985,4 +996,46 @@ model AuditLog {
   @@index([workspaceId, resourceType, resourceId])
   @@index([actorUserId, createdAt])
   @@map("audit_logs")
+}
+
+/// Nota interna de uma conversa.
+///
+/// NUNCA vai para o WhatsApp. É registro da equipe sobre o atendimento, e a
+/// interface tem de deixar isso visualmente óbvio: uma nota confundida com uma
+/// resposta é uma mensagem que o contato acha que recebeu e não recebeu.
+model ConversationNote {
+  id             String   @id @default(cuid())
+  workspaceId    String   @map("workspace_id")
+  conversationId String   @map("conversation_id")
+  authorId       String?  @map("author_id")
+  body           String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("conversation_notes")
+}
+
+/// Resposta pronta, por workspace. Texto puro: inserir uma resposta rápida
+/// preenche o compositor, nunca envia sozinha.
+model QuickReply {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  title       String
+  body        String
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, title])
+  @@index([workspaceId, title])
+  @@map("quick_replies")
 }
