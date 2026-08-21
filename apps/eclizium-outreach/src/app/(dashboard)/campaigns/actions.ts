@@ -254,10 +254,20 @@ const LIFECYCLE_AUDIT = {
  * Ações de ciclo de vida. `start` apenas MARCA a campanha como em execução —
  * nenhuma mensagem sai daqui.
  */
+export interface LifecycleOutcome {
+  status: string;
+  /** Jobs enfileirados ao iniciar ou retomar. */
+  queued?: number;
+  /** Jobs retirados da fila ao pausar. */
+  cancelledJobs?: number;
+  /** Destinatários marcados como cancelados. */
+  cancelledRecipients?: number;
+}
+
 export async function lifecycleAction(
   campaignId: string,
   action: LifecycleAction,
-): Promise<ActionResult<{ status: string; cancelledRecipients?: number }>> {
+): Promise<ActionResult<LifecycleOutcome>> {
   return runAction(`campaign.${action}`, async () => {
     await assertSameOriginRequest();
     const context = await requireWorkspaceRole(WorkspaceRole.ADMIN);
@@ -286,13 +296,20 @@ async function runLifecycle(
   action: LifecycleAction,
   workspaceId: string,
   campaignId: string,
-): Promise<{ status: string; cancelledRecipients?: number }> {
+): Promise<LifecycleOutcome> {
+  const input = { workspaceId, campaignId };
+
   if (action === 'cancel') {
-    const result = await cancelCampaign({ workspaceId, campaignId });
+    const result = await cancelCampaign(input);
     return { status: result.campaign.status, cancelledRecipients: result.cancelledRecipients };
   }
 
-  const runner = { start: startCampaign, pause: pauseCampaign, resume: resumeCampaign }[action];
-  const campaign = await runner({ workspaceId, campaignId });
-  return { status: campaign.status };
+  if (action === 'pause') {
+    const result = await pauseCampaign(input);
+    return { status: result.campaign.status, cancelledJobs: result.cancelledJobs };
+  }
+
+  // Iniciar e retomar enfileiram; nenhuma mensagem sai desta requisição.
+  const result = await (action === 'start' ? startCampaign(input) : resumeCampaign(input));
+  return { status: result.campaign.status, queued: result.queued };
 }

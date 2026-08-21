@@ -28,6 +28,7 @@ import {
   type EvaluationBreakdown,
 } from '@/features/campaigns/eligibility';
 import { audienceFiltersSchema, type AudienceFilters } from '@/features/campaigns/schemas';
+import { queueExecutionService } from '@/features/campaigns/execution-service';
 
 /**
  * Operações sobre campanhas.
@@ -376,40 +377,81 @@ export async function scheduleCampaign(input: {
 }
 
 /**
- * Coloca a campanha em execução.
+ * Coloca a campanha em execução e ENFILEIRA os destinatários.
  *
- * NÃO envia nada. Marca o estado e delega para a Sprint 5 — que ainda não
- * existe. Nenhum laço de envio é executado aqui.
+ * Nenhuma mensagem sai daqui: esta função cria um job por destinatário elegível
+ * e retorna. Quem envia é o worker, que relê tudo e reavalia a elegibilidade
+ * antes de cada chamada — é o que impede um handler HTTP de disparar milhares
+ * de requisições dentro de uma requisição.
  */
 export async function startCampaign(input: {
   workspaceId: string;
   campaignId: string;
-}): Promise<Campaign> {
+}): Promise<{ campaign: Campaign; queued: number }> {
   await assertHasEligibleRecipients(input.workspaceId, input.campaignId);
   await requireChannel(input.workspaceId);
 
-  return transition(input.workspaceId, input.campaignId, 'start', CampaignStatus.RUNNING, {
-    startedAt: new Date(),
-    pausedAt: null,
-  });
+  const campaign = await transition(
+    input.workspaceId,
+    input.campaignId,
+    'start',
+    CampaignStatus.RUNNING,
+    { startedAt: new Date(), pausedAt: null },
+  );
+
+  const enqueued = await queueExecutionService.enqueueCampaign(
+    input.workspaceId,
+    input.campaignId,
+  );
+
+  return { campaign, queued: enqueued.queued };
 }
 
+/**
+ * Pausa e retira da fila os jobs ainda não executados.
+ *
+ * O worker também checa o status antes de cada envio, então isto é defesa em
+ * profundidade — mas evita que a fila fique carregando trabalho morto.
+ */
 export async function pauseCampaign(input: {
   workspaceId: string;
   campaignId: string;
-}): Promise<Campaign> {
-  return transition(input.workspaceId, input.campaignId, 'pause', CampaignStatus.PAUSED, {
-    pausedAt: new Date(),
-  });
+}): Promise<{ campaign: Campaign; cancelledJobs: number }> {
+  const campaign = await transition(
+    input.workspaceId,
+    input.campaignId,
+    'pause',
+    CampaignStatus.PAUSED,
+    { pausedAt: new Date() },
+  );
+
+  const cancelledJobs = await queueExecutionService.pauseCampaignJobs(
+    input.workspaceId,
+    input.campaignId,
+  );
+
+  return { campaign, cancelledJobs };
 }
 
+/** Retoma e reenfileira quem ficou para trás. */
 export async function resumeCampaign(input: {
   workspaceId: string;
   campaignId: string;
-}): Promise<Campaign> {
-  return transition(input.workspaceId, input.campaignId, 'resume', CampaignStatus.RUNNING, {
-    pausedAt: null,
-  });
+}): Promise<{ campaign: Campaign; queued: number }> {
+  const campaign = await transition(
+    input.workspaceId,
+    input.campaignId,
+    'resume',
+    CampaignStatus.RUNNING,
+    { pausedAt: null },
+  );
+
+  const enqueued = await queueExecutionService.enqueueCampaign(
+    input.workspaceId,
+    input.campaignId,
+  );
+
+  return { campaign, queued: enqueued.queued };
 }
 
 /**
@@ -429,6 +471,10 @@ export async function cancelCampaign(input: {
     CampaignStatus.CANCELLED,
     { cancelledAt: new Date() },
   );
+
+  // Tira da fila antes de mexer nos destinatários: um worker que já pegou o
+  // job ainda vai ver a campanha cancelada e pular.
+  await queueExecutionService.cancelCampaignJobs(input.workspaceId, input.campaignId);
 
   const result = await prisma.campaignRecipient.updateMany({
     where: {
