@@ -1,13 +1,11 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Inbox, Megaphone, MessageSquare, Radio, ShieldBan, Users } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
 import { getWorkspaceOverview } from '@/features/dashboard/service';
-import { getMetaIntegrationState } from '@/features/messaging/channel-status';
+import { assessSendReadiness } from '@/features/readiness/service';
+import { SendReadiness } from '@/components/dashboard/send-readiness';
 import { requireWorkspace } from '@/lib/auth/guards';
 
 export const metadata: Metadata = { title: 'Painel' };
@@ -16,16 +14,20 @@ export const dynamic = 'force-dynamic';
 const ROADMAP = [
   { sprint: 'Sprint 0', title: 'Plataforma base', detail: 'Auth, workspace, schema, logging, testes.', done: true },
   { sprint: 'Sprint 1', title: 'Contatos', detail: 'Listas, tags, consentimento e suppression.', done: true },
-  { sprint: 'Sprint 2', title: 'Provider Meta', detail: 'Canal, templates e envio individual.', done: false },
-  { sprint: 'Sprint 3', title: 'Webhooks', detail: 'Eventos, mensagens e status.', done: false },
-  { sprint: 'Sprint 4', title: 'Campanhas', detail: 'Destinatários e elegibilidade.', done: false },
-  { sprint: 'Sprint 5', title: 'Fila', detail: 'Worker, retry e idempotência.', done: false },
+  { sprint: 'Sprint 2', title: 'Provider Meta', detail: 'Canal, templates e envio individual.', done: true },
+  { sprint: 'Sprint 3', title: 'Webhooks', detail: 'Eventos, mensagens e status.', done: true },
+  { sprint: 'Sprint 4', title: 'Campanhas', detail: 'Destinatários e elegibilidade.', done: true },
+  { sprint: 'Sprint 5', title: 'Fila', detail: 'Worker, retry e idempotência.', done: true },
+  { sprint: 'Sprint 6', title: 'Inbox', detail: 'Atendimento, notas, mídia e webhook assíncrono.', done: true },
+  { sprint: 'Sprint 7', title: 'Analytics', detail: 'Relatórios e auditoria.', done: false },
 ] as const;
 
 export default async function DashboardPage() {
   const context = await requireWorkspace();
-  const overview = await getWorkspaceOverview(context.workspace.id);
-  const integration = getMetaIntegrationState();
+  const [overview, readiness] = await Promise.all([
+    getWorkspaceOverview(context.workspace.id),
+    assessSendReadiness(context.workspace.id),
+  ]);
 
   return (
     <>
@@ -34,20 +36,9 @@ export default async function DashboardPage() {
         description="Visão geral da operação. Todos os números vêm do banco, sem dados simulados."
       />
 
-      {integration.status === 'NOT_CONFIGURED' ? (
-        <Alert variant="warning" className="mb-6">
-          <AlertTitle>Canal WhatsApp: NOT_CONFIGURED</AlertTitle>
-          <AlertDescription className="space-y-2">
-            <p>
-              Nenhum envio é possível enquanto as credenciais da Meta WhatsApp Business Cloud API
-              não forem configuradas no servidor.
-            </p>
-            <Button asChild variant="outline" size="sm">
-              <Link href="/settings/integrations">Ver o que falta</Link>
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+      <section aria-label="Prontidão para disparo" className="mb-6">
+        <SendReadiness report={readiness} />
+      </section>
 
       <section aria-label="Indicadores" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Contatos ativos" value={overview.contacts} icon={Users} />
