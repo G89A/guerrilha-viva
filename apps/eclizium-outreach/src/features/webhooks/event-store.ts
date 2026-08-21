@@ -3,6 +3,7 @@ import type { WebhookEvent } from '@prisma/client';
 import { ChannelProvider, Prisma, WebhookEventStatus } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import type { ParsedEvent } from '@/features/webhooks/parser';
+import { serializeEvent } from '@/features/webhooks/event-codec';
 
 /**
  * Persistência dos eventos de webhook.
@@ -29,12 +30,10 @@ export async function storeEvent(
     providerEventId: parsed.eventId,
     eventType: parsed.kind,
     signatureValid: context.signatureValid,
-    // Guarda só o fragmento do evento e a metadata: o bastante para reprocessar
-    // sozinho. Cabeçalhos, assinatura e credenciais nunca entram aqui.
-    payload: {
-      metadata: parsed.metadata,
-      event: parsed.raw,
-    } as unknown as Prisma.InputJsonValue,
+    // Guarda o evento já tipado, com o fragmento cru junto: o bastante para
+    // reprocessar sozinho, sem depender de nada que só existia em memória
+    // durante a entrega. Cabeçalhos, assinatura e credenciais nunca entram aqui.
+    payload: serializeEvent(parsed),
     status: WebhookEventStatus.RECEIVED,
   };
 
@@ -61,6 +60,33 @@ export async function markProcessing(eventId: string): Promise<void> {
     where: { id: eventId },
     data: { status: WebhookEventStatus.PROCESSING },
   });
+}
+
+/**
+ * Reivindica o evento para processamento, de forma atômica.
+ *
+ * Compare-and-set: só sai de RECEIVED, FAILED ou PROCESSING. PROCESSED e
+ * IGNORED são terminais e não voltam — é isso que impede que um reprocessamento
+ * manual, disparado ao mesmo tempo que o worker, aplique o efeito duas vezes.
+ *
+ * PROCESSING é reivindicável de propósito: um worker que morreu no meio deixa o
+ * evento nesse estado, e ele precisa poder ser retomado.
+ */
+export async function claimEvent(eventId: string): Promise<boolean> {
+  const result = await prisma.webhookEvent.updateMany({
+    where: {
+      id: eventId,
+      status: {
+        in: [
+          WebhookEventStatus.RECEIVED,
+          WebhookEventStatus.FAILED,
+          WebhookEventStatus.PROCESSING,
+        ],
+      },
+    },
+    data: { status: WebhookEventStatus.PROCESSING },
+  });
+  return result.count > 0;
 }
 
 export async function markProcessed(eventId: string): Promise<void> {
