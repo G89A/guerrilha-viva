@@ -100,12 +100,17 @@ nunca podem receber o prefixo `NEXT_PUBLIC_`:
 META_ACCESS_TOKEN
 META_PHONE_NUMBER_ID
 META_WABA_ID
-META_WEBHOOK_VERIFY_TOKEN
-META_APP_SECRET
+META_GRAPH_API_VERSION
+META_CREDENTIAL_KEY          (opcional — ver ADR 0011)
+META_WEBHOOK_VERIFY_TOKEN    (Sprint 3)
+META_APP_SECRET              (Sprint 3)
 ```
 
 Enquanto qualquer uma faltar, o produto reporta `NOT_CONFIGURED` e recusa
 qualquer operação que dependa do provider.
+
+Permissões exigidas do token na Meta: `whatsapp_business_messaging` (enviar) e
+`whatsapp_business_management` (ler e sincronizar templates).
 
 ## Deploy na Vercel
 
@@ -144,15 +149,50 @@ Regras que valem a pena conhecer antes de mexer:
   importação.
 - Contatos não são apagados pela operação normal — são arquivados.
 
+## WhatsApp e templates
+
+| Rota | O que faz |
+|---|---|
+| `/settings/integrations` | Configura a integração Meta, verifica a conexão de verdade e sincroniza templates |
+| `/templates` | Lista os templates da WABA com busca e filtros por status, categoria e idioma |
+| `/templates/[id]` | Detalhe, preview aproximado da mensagem e envio de UMA mensagem de teste |
+
+Regras que valem a pena conhecer antes de mexer:
+
+- **Só a Cloud API oficial da Meta.** Nada de automação de navegador, cliente
+  emulado, QR code não oficial ou API não oficial — em lugar nenhum do projeto.
+- Todo acesso à Meta passa por `MetaGraphClient`. `graph.facebook.com` aparece
+  em um único arquivo, e a versão da Graph API vem da configuração do canal
+  (ADR 0012).
+- **Credencial presente não é integração funcionando.** Salvar a configuração
+  deixa o canal em `NOT_CONFIGURED`; só `testChannelConnection`, que consulta
+  número, WABA e permissão de templates, promove a `CONNECTED`.
+- O access token nunca chega ao navegador. A UI vê apenas um fingerprint
+  derivado de hash (ADR 0011).
+- Nenhum envio acontece sem `evaluateContactEligibility` aprovar. Se o contato
+  for inelegível, **zero requisições** são feitas à Meta.
+- Um `wamid` nunca é fabricado: resposta sem id do provedor é falha, não
+  sucesso. Enviado ≠ entregue — entrega só será confirmada por webhook na
+  Sprint 3.
+- Envio de teste é unitário e manual, com confirmação explícita, teto de taxa no
+  servidor e chave de idempotência com unique no banco.
+- Templates nunca são marcados como aprovados localmente (ADR 0005); os que
+  somem da Meta viram `UNAVAILABLE` em vez de serem apagados (ADR 0013).
+
 ## Documentação
 
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
 - `docs/sprint-0-report.md` — relatório de encerramento da Sprint 0
 - `docs/sprint-1-report.md` — relatório da Sprint 1, com limitações conhecidas
+- `docs/sprint-2-report.md` — relatório da Sprint 2, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
 
-`/templates`, `/campaigns`, `/inbox`, `/analytics` não existem. A navegação
-lateral mostra essas seções desabilitadas, com a sprint responsável, em vez de
-links que levariam a telas quebradas.
+`/campaigns`, `/inbox` e `/analytics` não existem. A navegação lateral mostra
+essas seções desabilitadas, com a sprint responsável, em vez de links que
+levariam a telas quebradas.
+
+Webhooks da Meta (entrega, leitura, mensagens recebidas) são da Sprint 3.
+Enquanto isso, uma mensagem enviada para em `SENT` — o produto não simula
+`DELIVERED` nem `READ`.
