@@ -25,3 +25,27 @@ export function initialsOf(name: string): string {
   const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
   return (first + last).toUpperCase();
 }
+
+/**
+ * Tempo relativo curto para listas ("agora", "5 min", "3 h", "12/08").
+ * Mantém a lista densa sem esconder a informação: a data completa continua
+ * disponível no atributo `title` de quem usar.
+ */
+export function formatRelativeTime(value: Date | string, now: Date = new Date()): string {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const diffMs = now.getTime() - date.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+
+  if (minutes < 1) return 'agora';
+  if (minutes < 60) return `${minutes} min`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} d`;
+
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
