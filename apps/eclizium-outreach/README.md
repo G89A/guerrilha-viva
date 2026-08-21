@@ -2,16 +2,18 @@
 
 Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business.
 
-**Estado atual: SPRINT 1 concluída.** Base de plataforma (auth, workspaces,
-schema, erros, logging, testes) mais o núcleo de CRM e compliance: contatos,
-listas, tags, consentimentos, suppression list, importação CSV com wizard,
-deduplicação por telefone, busca e filtros. Templates, campanhas, fila, inbox e
-analytics ainda **não** existem, e a interface diz isso explicitamente em vez de
-simular.
+**Estado atual: SPRINT 5 concluída.** Plataforma (auth, workspaces, RBAC,
+auditoria), CRM e compliance (contatos, listas, tags, consentimentos, supressão,
+importação CSV), integração WhatsApp Cloud API com templates, webhooks e Inbox,
+motor de campanhas e — nesta sprint — **fila, workers e disparo em massa**:
+enfileiramento idempotente, reserva de job com recuperação de worker morto,
+retentativa com backoff, vazão por canal e progresso na tela.
 
-Nenhuma integração externa está configurada. O canal WhatsApp reporta
-`NOT_CONFIGURED` e a tela de integrações lista exatamente quais variáveis
-faltam.
+`/analytics` ainda **não** existe, e a interface diz isso em vez de simular.
+
+Nenhuma integração externa está configurada neste repositório. Sem credencial o
+canal WhatsApp reporta `NOT_CONFIGURED`, a tela de integrações lista exatamente
+quais variáveis faltam e a campanha recusa iniciar.
 
 ---
 
@@ -57,6 +59,7 @@ O seed cria dois tenants distintos, úteis para conferir o isolamento à mão:
 | `npm run db:migrate` | cria/aplica migration em desenvolvimento |
 | `npm run db:deploy` | aplica migrations pendentes (produção) |
 | `npm run db:seed` | popula dados de desenvolvimento |
+| `npm run worker` | worker de envio em processo contínuo (drena a fila de campanhas) |
 
 ## Rodando os testes
 
@@ -90,6 +93,15 @@ Destaques da suíte:
   duplicado.
 - `tests/integration/session.test.ts` — token nunca em texto claro, expiração,
   revogação, conta desativada.
+- `tests/integration/job-queue.test.ts` — reserva com `SKIP LOCKED`, reserva
+  expirada, backoff, carta morta, 10 workers disputando o mesmo lote.
+- `tests/integration/campaign-execution.test.ts` — ciclo completo, reverificação
+  de elegibilidade antes do envio, pausar e cancelar em pleno voo.
+- `tests/integration/worker-concurrency.test.ts` — 2, 6 e 10 workers e 50 ciclos
+  simultâneos: exatamente uma chamada por contato.
+- `tests/integration/execution-redteam.test.ts` — job forjado de outro
+  workspace, job duplicado com chave diferente, campanha ressuscitada, canal
+  apagado no meio do ciclo.
 
 ## Variáveis de ambiente
 
@@ -104,6 +116,7 @@ META_GRAPH_API_VERSION
 META_CREDENTIAL_KEY          (opcional — ver ADR 0011)
 META_WEBHOOK_VERIFY_TOKEN    (webhook: challenge de verificação)
 META_APP_SECRET              (webhook: validação de assinatura)
+WORKER_TOKEN                 (cron: segredo do POST /api/internal/worker/tick)
 ```
 
 Enquanto qualquer uma faltar, o produto reporta `NOT_CONFIGURED` e recusa
@@ -125,6 +138,12 @@ Configure o projeto Vercel com:
 
 Se `DATABASE_URL` apontar para um pooler (PgBouncer, Neon), defina também
 `DIRECT_DATABASE_URL` com a conexão direta, exigida pelas migrations.
+
+Para o envio funcionar em serverless, configure também um cron chamando
+`POST /api/internal/worker/tick` com o `WORKER_TOKEN` no cabeçalho
+`Authorization` — em `vercel.json`, por exemplo, um `crons` de um minuto. Sem
+isso as campanhas enfileiram e ficam paradas: a fila é durável, então nada se
+perde, mas nada sai.
 
 ## Contatos e compliance
 
@@ -216,14 +235,15 @@ Regras que valem a pena conhecer antes de mexer:
 
 Regras que valem a pena conhecer antes de mexer:
 
-- **Nada é enviado na Sprint 4.** `startCampaign` marca `RUNNING` e delega para
-  `CampaignExecutionService`, que hoje recusa com `NOT_CONFIGURED`. A tela diz
-  isso ao operador em vez de fingir que enfileirou.
+- **Iniciar enfileira de verdade.** `startCampaign` marca `RUNNING` e enfileira
+  um job por destinatário elegível; quem envia é o worker, fora da requisição.
+  A tela mostra a fila e o progresso reais, não uma barra decorativa.
 - **Campanha exige template APROVADO pela Meta.** Free-form é só para a Inbox,
   dentro da janela de atendimento — nunca como atalho para campanha.
 - **A audiência é congelada na preparação** (ADR 0017), não resolvida por
-  consulta na hora do envio. Por isso a Sprint 5 tem de reavaliar a
-  elegibilidade imediatamente antes de cada envio.
+  consulta na hora do envio. Por isso o worker **reavalia a elegibilidade
+  imediatamente antes de cada envio**: consentimento revogado, supressão nova ou
+  contato arquivado depois de preparar bloqueiam o disparo.
 - **Supressão vence tudo:** lista, tag, campanha anterior e até consentimento
   concedido.
 - **`UNKNOWN` nunca vira `GRANTED`.** Telefone existente não é consentimento.
@@ -234,6 +254,50 @@ Regras que valem a pena conhecer antes de mexer:
 - Faltou valor para uma variável? O contato é bloqueado, a menos que exista um
   texto alternativo escrito explicitamente. Nada é inventado.
 
+## Fila e envio
+
+O disparo acontece fora da requisição HTTP, numa fila durável em PostgreSQL
+(ADR 0018). Há dois jeitos de rodar o worker — os dois chamam a **mesma** função
+de ciclo:
+
+```bash
+npm run worker                     # processo contínuo (VM, contêiner)
+```
+
+```bash
+# serverless (Vercel Cron): um POST por minuto
+curl -X POST -H "Authorization: Bearer $WORKER_TOKEN" \
+  https://SEU-DOMINIO/api/internal/worker/tick
+```
+
+Sem `WORKER_TOKEN` configurado o endpoint responde `503` e **não** executa nada:
+não existe modo sem autenticação para uma rota que envia mensagem de verdade.
+
+O que vale saber antes de mexer:
+
+- **Reserva, não retirada.** O worker reserva o job por 60 s. Worker que morre
+  não trava o envio: a reserva expira e outro worker assume.
+  `FOR UPDATE SKIP LOCKED` garante que dois workers nunca peguem o mesmo job —
+  há teste com 2, 6 e 10 workers simultâneos e com 50 ciclos concorrentes.
+- **Idempotência determinística.** A chave do job é
+  `campaign-send:<campaignId>:<recipientId>` e a gravação usa
+  `ON CONFLICT DO NOTHING`. Retomar duas vezes não duplica envio; a unique de
+  `Message` é a última barreira.
+- **Retentar é decisão do provider, não do worker** (ADR 0019). Credencial
+  inválida, payload inválido e permissão negada **não** retentam — vão direto
+  para carta morta. Cinco tentativas com backoff exponencial e jitter.
+- **Vazão por canal** (`messagesPerSecond`, `sendBurst`) num token bucket no
+  banco, compartilhado entre processos (ADR 0020). Ficar sem token **não** é
+  falha: o job volta para a fila sem gastar tentativa.
+- **O controle de vazão e o jitter existem para respeitar o limite do provider e
+  espalhar carga** — nunca para parecer humano, mascarar automação ou escapar de
+  detecção. Está escrito nas ADRs porque é regra de produto.
+- **Pausar apaga os jobs pendentes** e devolve os destinatários para `ELIGIBLE`,
+  justamente para que retomar volte a funcionar. Marcar em vez de apagar deixava
+  a chave de idempotência consumida — foi bug desta sprint, com teste agora.
+- **Carta morta é visível.** Jobs `DEAD` aparecem como aviso na campanha. Nada
+  é descartado em silêncio.
+
 ## Documentação
 
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
@@ -242,6 +306,7 @@ Regras que valem a pena conhecer antes de mexer:
 - `docs/sprint-2-report.md` — relatório da Sprint 2, com limitações conhecidas
 - `docs/sprint-3-report.md` — relatório da Sprint 3, com limitações conhecidas
 - `docs/sprint-4-report.md` — relatório da Sprint 4, com limitações conhecidas
+- `docs/sprint-5-report.md` — relatório da Sprint 5, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
@@ -249,9 +314,9 @@ Regras que valem a pena conhecer antes de mexer:
 `/analytics` não existe. A navegação lateral mostra a seção desabilitada, com a
 sprint responsável, em vez de um link que levaria a uma tela quebrada.
 
-O **disparo de campanhas** também não: a Sprint 4 monta a audiência, avalia a
-elegibilidade e prepara tudo, mas o envio em massa — fila, workers, retry,
-vazão — é da Sprint 5.
+Também não existe **agendamento automático**: `scheduledAt` é validado e
+gravado, mas ninguém inicia a campanha sozinho quando a hora chega — iniciar
+continua sendo ato do operador.
 
 A integração com a Meta está **implementada mas não validada contra credenciais
 reais**: toda a lógica é exercitada contra fixtures no formato documentado e
