@@ -53,7 +53,16 @@ export type AuditAction =
   | 'message.reply_sent'
   | 'conversation.created'
   | 'conversation.read'
-  | 'conversation.status_changed';
+  | 'conversation.status_changed'
+  | 'campaign.created'
+  | 'campaign.updated'
+  | 'campaign.prepared'
+  | 'campaign.dry_run'
+  | 'campaign.scheduled'
+  | 'campaign.started'
+  | 'campaign.paused'
+  | 'campaign.resumed'
+  | 'campaign.cancelled';
 
 export interface WriteAuditLogInput {
   action: AuditAction;

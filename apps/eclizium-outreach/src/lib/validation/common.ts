@@ -1,7 +1,15 @@
 import { z } from 'zod';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from '@/lib/auth/password';
 
-export const cuidSchema = z.string().min(1).max(64);
+/**
+ * Identificador gerado pelo Prisma (`cuid`/`cuid2`): alfanumérico, sem
+ * separadores. A forma é verificada na borda para que um valor malformado
+ * — travessia de caminho, aspas, marcação — morra na validação em vez de
+ * seguir viagem como se fosse um id.
+ */
+export const cuidSchema = z
+  .string()
+  .regex(/^[a-z0-9]{8,64}$/i, 'Identificador inválido.');
 
 export const emailSchema = z
   .string()
