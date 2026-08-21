@@ -27,6 +27,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Templates', href: '/templates', icon: FileText },
   { label: 'Campanhas', href: '/campaigns', icon: Megaphone },
   { label: 'Inbox', href: '/inbox', icon: Inbox },
-  { label: 'Analytics', href: '/analytics', icon: BarChart3, availableFrom: 'Sprint 7' },
+  { label: 'Analytics', href: '/analytics', icon: BarChart3 },
   { label: 'Configurações', href: '/settings/workspace', icon: Settings },
 ] as const;
