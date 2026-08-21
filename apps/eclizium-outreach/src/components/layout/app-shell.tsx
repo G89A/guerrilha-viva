@@ -71,7 +71,7 @@ export function AppShell({ user, workspace, workspaces, roleLabel, children }: A
         </div>
 
         <p className="border-t border-border px-4 py-3 text-[11px] leading-relaxed text-muted-foreground">
-          Sprint 1 · CRM e compliance
+          Sprint 2 · WhatsApp Business
         </p>
       </aside>
 
