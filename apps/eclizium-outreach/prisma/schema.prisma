@@ -693,13 +693,28 @@ model Message {
   /// duplicated webhook deliveries cannot create a second row.
   providerMessageId String?          @map("provider_message_id")
   errorCode         String?          @map("error_code")
+  errorTitle        String?          @map("error_title")
   errorMessage      String?          @map("error_message")
-  sentAt            DateTime?        @map("sent_at")
-  deliveredAt       DateTime?        @map("delivered_at")
-  readAt            DateTime?        @map("read_at")
-  failedAt          DateTime?        @map("failed_at")
-  createdAt         DateTime         @default(now()) @map("created_at")
-  updatedAt         DateTime         @updatedAt @map("updated_at")
+  /// Detalhe estruturado do erro do provider, já sanitizado.
+  errorDetails      Json?            @map("error_details")
+
+  /// Momento informado pelo provider, distinto de quando nós registramos.
+  providerTimestamp DateTime? @map("provider_timestamp")
+
+  /// Metadados de mídia recebida. O binário não é baixado nesta sprint.
+  mediaId       String?     @map("media_id")
+  mediaMimeType String?     @map("media_mime_type")
+  mediaSha256   String?     @map("media_sha256")
+  mediaFilename String?     @map("media_filename")
+  mediaCaption  String?     @map("media_caption")
+  mediaStatus   MediaStatus @default(NOT_APPLICABLE) @map("media_status")
+
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+  failedAt    DateTime? @map("failed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   channel      MessagingChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -723,10 +738,25 @@ model Message {
 // ---------------------------------------------------------------------------
 
 enum WebhookEventStatus {
+  /// Persistido, ainda não processado.
   RECEIVED
+  /// Processamento em andamento. Existe para que um worker (Sprint 5) possa
+  /// reclamar o evento sem que outro o pegue junto.
+  PROCESSING
   PROCESSED
   FAILED
+  /// Reconhecido, mas sem efeito a aplicar (tipo não suportado, canal
+  /// desconhecido). Não é erro.
   IGNORED
+}
+
+/// Estado do arquivo de mídia de uma mensagem. O download em si não pertence
+/// a esta sprint; os metadados são guardados para que ele possa acontecer.
+enum MediaStatus {
+  NOT_APPLICABLE
+  NOT_YET_FETCHED
+  FETCHED
+  FAILED
 }
 
 /// Raw provider payload, stored before any processing. `providerEventId` is
@@ -738,10 +768,14 @@ model WebhookEvent {
   providerEventId String             @map("provider_event_id")
   eventType       String?            @map("event_type")
   status          WebhookEventStatus @default(RECEIVED)
+  /// Fragmento do evento + metadata da requisição, o bastante para reprocessar
+  /// sozinho. Nunca contém cabeçalhos, assinatura ou credencial.
   payload         Json
   signatureValid  Boolean            @default(false) @map("signature_valid")
+  receivedAt      DateTime           @default(now()) @map("received_at")
   processedAt     DateTime?          @map("processed_at")
-  error           String?
+  failedAt        DateTime?          @map("failed_at")
+  errorMessage    String?            @map("error_message")
   createdAt       DateTime           @default(now()) @map("created_at")
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
