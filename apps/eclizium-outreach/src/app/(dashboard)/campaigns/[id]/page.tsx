@@ -16,6 +16,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { getCampaignDetail, queryRecipients } from '@/features/campaigns/campaign-query';
 import { recipientFiltersSchema } from '@/features/campaigns/schemas';
 import { computeCampaignMetrics, computeRates } from '@/features/campaigns/metrics';
+import { campaignQueueStatus } from '@/features/campaigns/execution-service';
+import { CampaignProgress } from '@/components/campaigns/campaign-progress';
 import { REASON_LABELS, type CampaignEligibilityReason } from '@/features/campaigns/eligibility';
 import { requireWorkspace } from '@/lib/auth/guards';
 import { hasAtLeastRole, WorkspaceRole } from '@/lib/auth/roles';
@@ -59,9 +61,10 @@ export default async function CampaignDetailPage({
   const parsed = recipientFiltersSchema.safeParse(raw);
   const filters = parsed.success ? parsed.data : recipientFiltersSchema.parse({});
 
-  const [recipients, metrics] = await Promise.all([
+  const [recipients, metrics, queue] = await Promise.all([
     queryRecipients(context.workspace.id, campaign.id, filters),
     computeCampaignMetrics(context.workspace.id, campaign.id),
+    campaignQueueStatus(context.workspace.id, campaign.id),
   ]);
   const rates = computeRates(metrics);
   const canOperate = hasAtLeastRole(context.role, WorkspaceRole.ADMIN);
@@ -99,12 +102,20 @@ export default async function CampaignDetailPage({
         </Alert>
       ) : null}
 
-      {campaign.status === 'RUNNING' ? (
-        <Alert variant="info" className="mb-6">
-          <AlertTitle>Execução ainda não implementada</AlertTitle>
+      {campaign.status === 'RUNNING' || queue.pending > 0 || queue.leased > 0 ? (
+        <div className="mb-6 rounded-lg border border-border p-4">
+          <CampaignProgress metrics={metrics} queue={queue} />
+        </div>
+      ) : null}
+
+      {queue.dead > 0 ? (
+        <Alert variant="warning" className="mb-6">
+          <AlertTitle>
+            {queue.dead.toLocaleString('pt-BR')} envio(s) desistiram após as tentativas
+          </AlertTitle>
           <AlertDescription>
-            A campanha está marcada como em execução, mas o disparo em massa entra na Sprint 5.
-            Nenhuma mensagem foi enfileirada ou enviada.
+            Veja o motivo na coluna correspondente da tabela de destinatários. Falhas de
+            credencial ou de template não são repetidas — repetir não conserta a causa.
           </AlertDescription>
         </Alert>
       ) : null}
