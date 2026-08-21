@@ -3,6 +3,7 @@ import {
   type MessagingProvider,
   type ProviderCheck,
   type ProviderConnectionResult,
+  type ProviderMedia,
   type ProviderName,
   type ProviderTemplate,
   type ProviderTemplateButton,
@@ -274,7 +275,89 @@ export class MetaWhatsAppProvider implements MessagingProvider {
 
     return extractSendResult(response);
   }
+
+  /**
+   * Confirma leitura ao WhatsApp.
+   *
+   * É o oposto do status READ que recebemos por webhook: aqui somos NÓS que
+   * dizemos ter lido a mensagem do contato. Os dois nunca devem ser
+   * confundidos, e este é sempre um ato explícito da equipe.
+   */
+  async markRead(providerMessageId: string): Promise<void> {
+    await this.client.request<unknown>({
+      method: 'POST',
+      path: `${this.phoneNumberId}/messages`,
+      operation: 'messages.mark_read',
+      body: {
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: providerMessageId,
+      },
+    });
+  }
+
+  /**
+   * Busca o binário de uma mídia recebida, em dois passos.
+   *
+   * A Meta não devolve o arquivo direto: primeiro entrega uma URL temporária
+   * (minutos de validade), depois o arquivo. Por isso nada disso é guardado — a
+   * URL expira e não serviria de referência.
+   */
+  async fetchMedia(mediaId: string, maxBytes: number): Promise<ProviderMedia> {
+    const descriptor = await this.client.request<MediaDescriptor>({
+      method: 'GET',
+      path: mediaId,
+      operation: 'media.describe',
+    });
+
+    const url = typeof descriptor?.url === 'string' ? descriptor.url : null;
+    if (!url) {
+      throw new ProviderError('NOT_FOUND', 'Provedor não devolveu URL para esta mídia.');
+    }
+
+    // A URL vem da Meta e é usada como veio. Só aceitamos host da própria Meta:
+    // uma URL apontando para outro lugar levaria o token para fora.
+    let host: string;
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      throw new ProviderError('MALFORMED_RESPONSE', 'URL de mídia inválida.');
+    }
+    if (!ALLOWED_MEDIA_HOSTS.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) {
+      throw new ProviderError('MALFORMED_RESPONSE', 'URL de mídia fora dos domínios da Meta.');
+    }
+
+    const binary = await this.client.fetchBinary(url, { maxBytes, operation: 'media.download' });
+
+    return {
+      bytes: binary.bytes,
+      mimeType:
+        (typeof descriptor?.mime_type === 'string' ? descriptor.mime_type : null) ??
+        binary.contentType,
+      sizeBytes: binary.bytes.byteLength,
+    };
+  }
 }
+
+interface MediaDescriptor {
+  url?: unknown;
+  mime_type?: unknown;
+}
+
+/**
+ * Hosts de onde aceitamos baixar mídia.
+ *
+ * A URL é escolhida pela Meta, mas o token vai junto na requisição — seguir um
+ * host arbitrário seria entregá-lo. Na prática a Cloud API devolve
+ * `lookaside.fbsbx.com`; os demais estão aqui porque a Meta já variou o host
+ * entre versões, e uma allowlist curta demais derruba mídia legítima.
+ */
+const ALLOWED_MEDIA_HOSTS = [
+  'graph.facebook.com',
+  'fbsbx.com',
+  'fbcdn.net',
+  'cdninstagram.com',
+] as const;
 
 /**
  * Extrai o `wamid`. Uma resposta 200 sem id é tratada como falha: sem o id do

@@ -158,10 +158,21 @@ export interface SendMessageResult {
 // Provider
 // ---------------------------------------------------------------------------
 
+/** Binário de mídia recebida, buscado sob demanda. Nunca é armazenado. */
+export interface ProviderMedia {
+  bytes: Uint8Array;
+  mimeType: string | null;
+  sizeBytes: number;
+}
+
 export interface MessagingProvider {
   readonly name: ProviderName;
   testConnection(): Promise<ProviderConnectionResult>;
   getTemplates(): Promise<ProviderTemplate[]>;
   sendTemplate(input: SendTemplateInput): Promise<SendMessageResult>;
   sendText?(input: SendTextInput): Promise<SendMessageResult>;
+  /** Confirma ao provedor que a mensagem do contato foi lida pela equipe. */
+  markRead?(providerMessageId: string): Promise<void>;
+  /** Busca o binário de uma mídia recebida. O provedor é a única fonte. */
+  fetchMedia?(mediaId: string, maxBytes: number): Promise<ProviderMedia>;
 }

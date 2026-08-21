@@ -146,6 +146,79 @@ export class MetaGraphClient {
     this.logContext = options.logContext ?? {};
   }
 
+  /**
+   * Baixa um binário de uma URL absoluta da Meta (mídia).
+   *
+   * Separado de `request` de propósito: a resposta não é JSON, e tentar
+   * interpretá-la como tal transformaria um arquivo válido em erro. O token vai
+   * no header e nunca na URL — a URL de mídia da Meta é temporária e pode
+   * aparecer em log de proxy.
+   */
+  async fetchBinary(
+    url: string,
+    options: { maxBytes: number; operation: string },
+  ): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const startedAt = Date.now();
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: { authorization: `Bearer ${this.accessToken}` },
+      });
+    } catch (error) {
+      clearTimeout(timer);
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      const kind: ProviderErrorKind = aborted ? 'TIMEOUT' : 'NETWORK';
+      this.log(options.operation, { result: 'error', kind, durationMs: Date.now() - startedAt });
+      throw new ProviderError(
+        kind,
+        aborted ? 'Tempo esgotado ao baixar a mídia.' : 'Falha de rede ao baixar a mídia.',
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      const kind = classifyMetaFailure(response.status, null);
+      this.log(options.operation, {
+        result: 'error',
+        kind,
+        httpStatus: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+      throw new ProviderError(kind, `Provedor respondeu ${response.status} ao baixar a mídia.`, {
+        httpStatus: response.status,
+      });
+    }
+
+    const buffer = await response.arrayBuffer();
+
+    // Teto aplicado depois de ler porque `content-length` é informado pelo
+    // outro lado e não é confiável. Recusar é melhor que servir um arquivo que
+    // estoura a memória do processo.
+    if (buffer.byteLength > options.maxBytes) {
+      throw new ProviderError('INVALID_REQUEST', 'Mídia maior que o limite suportado.', {
+        httpStatus: response.status,
+      });
+    }
+
+    this.log(options.operation, {
+      result: 'ok',
+      httpStatus: response.status,
+      bytes: buffer.byteLength,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return {
+      bytes: new Uint8Array(buffer),
+      contentType: response.headers.get('content-type'),
+    };
+  }
+
   async request<T>(request: GraphRequest): Promise<T> {
     const url = buildMetaGraphUrl(this.version, request.path, request.query ?? {});
     const controller = new AbortController();
