@@ -4,7 +4,7 @@ import { Plus, Upload } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
 import { ContactFilters } from '@/components/contacts/contact-filters';
 import { ContactTable } from '@/components/contacts/contact-table';
-import { Pagination } from '@/components/contacts/pagination';
+import { Pagination } from '@/components/ui/pagination';
 import { Button } from '@/components/ui/button';
 import { contactFiltersSchema } from '@/features/contacts/schemas';
 import { contactFilterOptions, queryContacts } from '@/features/contacts/query';
@@ -78,6 +78,7 @@ export default async function ContactsPage({
       <ContactTable rows={page.rows} hasFilters={hasFilters} canWrite={canWrite} />
 
       <Pagination
+            label="Paginação de contatos"
         page={page.page}
         pageCount={page.pageCount}
         total={page.total}

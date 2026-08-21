@@ -9,9 +9,11 @@ export interface PaginationProps {
   pageCount: number;
   total: number;
   pageSize: number;
+  /** Rótulo acessível da navegação; identifica a lista que está sendo paginada. */
+  label?: string;
 }
 
-export function Pagination({ page, pageCount, total, pageSize }: PaginationProps) {
+export function Pagination({ page, pageCount, total, pageSize, label = 'Paginação' }: PaginationProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -28,7 +30,7 @@ export function Pagination({ page, pageCount, total, pageSize }: PaginationProps
 
   return (
     <nav
-      aria-label="Paginação de contatos"
+      aria-label={label}
       className="flex items-center justify-between gap-3 pt-3 text-sm"
     >
       <p className="text-muted-foreground" aria-live="polite">

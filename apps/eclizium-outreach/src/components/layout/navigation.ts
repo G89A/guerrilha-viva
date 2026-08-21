@@ -24,7 +24,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Painel', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Contatos', href: '/contacts', icon: Users },
-  { label: 'Templates', href: '/templates', icon: FileText, availableFrom: 'Sprint 2' },
+  { label: 'Templates', href: '/templates', icon: FileText },
   { label: 'Campanhas', href: '/campaigns', icon: Megaphone, availableFrom: 'Sprint 4' },
   { label: 'Inbox', href: '/inbox', icon: Inbox, availableFrom: 'Sprint 6' },
   { label: 'Analytics', href: '/analytics', icon: BarChart3, availableFrom: 'Sprint 7' },
