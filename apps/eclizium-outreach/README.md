@@ -2,13 +2,12 @@
 
 Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business.
 
-**Estado atual: SPRINT 6 concluída.** Plataforma (auth, workspaces, RBAC,
-auditoria), CRM e compliance (contatos, listas, tags, consentimentos, supressão,
-importação CSV), integração WhatsApp Cloud API com templates e webhooks, motor de
-campanhas, fila e disparo em massa, e — nesta sprint — a **Inbox de atendimento**:
-responsável, notas internas, respostas rápidas, paginação por cursor, mídia sob
-demanda e confirmação de leitura. O processamento de webhook saiu de dentro da
-requisição e virou job com retentativa.
+**Estado atual: SPRINT 7 concluída — motor principal completo.** Plataforma
+(auth, workspaces, RBAC, auditoria), CRM e compliance, integração WhatsApp Cloud
+API com templates e webhooks, motor de campanhas, fila e disparo em massa, Inbox
+de atendimento e — nesta sprint — **analytics e auditoria**: relatórios por
+agregação com fuso explícito, exportação CSV e o registro de auditoria
+finalmente legível.
 
 `/analytics` ainda **não** existe, e a interface diz isso em vez de simular.
 
@@ -346,6 +345,34 @@ O que vale saber antes de mexer:
 - **Carta morta é visível.** Jobs `DEAD` aparecem como aviso na campanha. Nada
   é descartado em silêncio.
 
+## Analytics e auditoria
+
+| Rota | O que faz |
+|---|---|
+| `/analytics` | Relatórios do período: mensagens, falhas, atendimento, base e campanhas |
+| `/analytics/audit` | Registro de auditoria — **ADMIN para cima** |
+| `/api/analytics/export` | CSV de mensagens, audiência ou campanhas |
+| `/api/analytics/audit/export` | CSV do registro de auditoria |
+
+O que vale saber antes de mexer:
+
+- **Tudo por agregação** (ADR 0024). Nenhuma consulta traz linha para contar em
+  memória, e o desempenho por campanha é um `GROUP BY` só.
+- **O fuso é escolhido por quem lê e aparece na tela.** Agrupar em UTC jogaria
+  tudo que acontece depois das 21h no Brasil para o dia seguinte.
+- **A conversão de fuso é em dois passos** — `(x AT TIME ZONE 'UTC') AT TIME ZONE $tz`.
+  As colunas são `timestamp without time zone` em UTC, e um `AT TIME ZONE`
+  sozinho INTERPRETA em vez de converter. Foi bug real, pego por teste.
+- **Ausência de dado não é desempenho ruim.** Sem webhook não há confirmação de
+  entrega: a tela mostra `—` e explica, em vez de 0%.
+- **Estado que avança conta acumulado**: uma mensagem lida também foi entregue e
+  enviada.
+- **O audit log é só leitura** (ADR 0025). Não existe caminho para editar ou
+  apagar registro — log que o sistema altera não serve de prova.
+- **As cores dos gráficos foram validadas, não escolhidas a olho**: paleta
+  conferida contra a superfície de cada modo, com contraste, separação para
+  daltonismo e visão normal. Ver `docs/adr/0024`.
+
 ## Documentação
 
 - `docs/colocar-no-ar.md` — **do zero ao primeiro disparo real**: banco, deploy,
@@ -358,14 +385,12 @@ O que vale saber antes de mexer:
 - `docs/sprint-4-report.md` — relatório da Sprint 4, com limitações conhecidas
 - `docs/sprint-5-report.md` — relatório da Sprint 5, com limitações conhecidas
 - `docs/sprint-6-report.md` — relatório da Sprint 6, com limitações conhecidas
+- `docs/sprint-7-report.md` — relatório da Sprint 7, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
 
-`/analytics` não existe. A navegação lateral mostra a seção desabilitada, com a
-sprint responsável, em vez de um link que levaria a uma tela quebrada.
-
-Também não existe **agendamento automático**: `scheduledAt` é validado e
+Não existe **agendamento automático**: `scheduledAt` é validado e
 gravado, mas ninguém inicia a campanha sozinho quando a hora chega — iniciar
 continua sendo ato do operador.
 
