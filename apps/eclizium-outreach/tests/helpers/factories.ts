@@ -9,6 +9,8 @@ import {
   TemplateAvailability,
   TemplateStatus,
   WorkspaceRole,
+  CampaignStatus,
+  type Campaign,
   type MessageTemplate,
   type MessagingChannel,
 } from '@prisma/client';
@@ -183,4 +185,82 @@ export async function seedEligibleContact(
   });
 
   return contactId;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 4 — campanhas
+// ---------------------------------------------------------------------------
+
+export async function seedCampaign(
+  workspaceId: string,
+  overrides: Partial<{
+    name: string;
+    status: CampaignStatus;
+    channelId: string;
+    templateId: string;
+    audienceFilters: unknown;
+    variableMap: unknown;
+    createdById: string;
+  }> = {},
+): Promise<Campaign> {
+  return testPrisma().campaign.create({
+    data: {
+      workspaceId,
+      name: overrides.name ?? unique('campanha'),
+      status: overrides.status ?? CampaignStatus.DRAFT,
+      channelId: overrides.channelId ?? null,
+      templateId: overrides.templateId ?? null,
+      audienceFilters: (overrides.audienceFilters ?? {}) as never,
+      variableMap: (overrides.variableMap ?? {
+        'body:1': { source: 'contact.firstName' },
+      }) as never,
+      createdById: overrides.createdById ?? null,
+    },
+  });
+}
+
+/**
+ * Cria `count` contatos elegíveis de uma vez. Usado nos testes de escala —
+ * criar um a um tornaria a suíte lenta demais para valer a pena.
+ */
+export async function seedContactsBulk(
+  workspaceId: string,
+  count: number,
+  options: { consent?: ConsentStatus; city?: string; prefix?: string } = {},
+): Promise<number> {
+  const prefix = options.prefix ?? '5585';
+  const base = 900000000 + Math.floor(Math.random() * 50_000_000);
+
+  const contacts = Array.from({ length: count }, (_value, index) => ({
+    workspaceId,
+    phoneE164: `+${prefix}${String(base + index).slice(0, 9)}`,
+    firstName: `Contato ${index}`,
+    company: `Empresa ${index % 50}`,
+    city: options.city ?? (index % 2 === 0 ? 'Fortaleza' : 'Recife'),
+    segment: index % 3 === 0 ? 'Saúde' : 'Varejo',
+  }));
+
+  const inserted = await testPrisma().contact.createMany({
+    data: contacts,
+    skipDuplicates: true,
+  });
+
+  if (options.consent) {
+    const created = await testPrisma().contact.findMany({
+      where: { workspaceId },
+      select: { id: true },
+    });
+    await testPrisma().contactConsent.createMany({
+      data: created.map((contact) => ({
+        workspaceId,
+        contactId: contact.id,
+        channel: ConsentChannel.WHATSAPP,
+        status: options.consent as ConsentStatus,
+        capturedAt: options.consent === ConsentStatus.GRANTED ? new Date() : null,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  return inserted.count;
 }
