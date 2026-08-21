@@ -31,7 +31,17 @@ export type AuditAction =
   | 'contact.consent_updated'
   | 'contact.suppressed'
   | 'contact.unsuppressed'
-  | 'contact.batch_action';
+  | 'contact.batch_action'
+  | 'messaging.integration_configured'
+  | 'messaging.integration_disconnected'
+  | 'messaging.connection_tested'
+  | 'messaging.connection_failed'
+  | 'messaging.templates_sync_started'
+  | 'messaging.templates_sync_completed'
+  | 'messaging.templates_sync_failed'
+  | 'messaging.test_message_attempted'
+  | 'messaging.test_message_sent'
+  | 'messaging.test_message_failed';
 
 export interface WriteAuditLogInput {
   action: AuditAction;
