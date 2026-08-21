@@ -15,7 +15,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
