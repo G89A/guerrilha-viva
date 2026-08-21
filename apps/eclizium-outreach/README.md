@@ -18,6 +18,11 @@ quais variáveis faltam e a campanha recusa iniciar.
 
 ---
 
+> **Quer colocar no ar e disparar de verdade?** Siga
+> [`docs/colocar-no-ar.md`](docs/colocar-no-ar.md). O painel tem um cartão
+> **Prontidão para disparo** que verifica, contra o banco e o ambiente, cada
+> coisa que precisa estar de pé — e diz qual falta.
+
 ## Requisitos
 
 - Node.js 20+ (desenvolvido em 22)
@@ -343,6 +348,8 @@ O que vale saber antes de mexer:
 
 ## Documentação
 
+- `docs/colocar-no-ar.md` — **do zero ao primeiro disparo real**: banco, deploy,
+  credenciais da Meta, webhook, worker e o que só você pode fazer
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
 - `docs/sprint-0-report.md` — relatório de encerramento da Sprint 0
 - `docs/sprint-1-report.md` — relatório da Sprint 1, com limitações conhecidas
