@@ -12,7 +12,7 @@ import {
   updateCampaign,
 } from '@/features/campaigns/campaign-service';
 import { computeRates, reconcileCampaignMetrics } from '@/features/campaigns/metrics';
-import { pendingExecutionService } from '@/features/campaigns/execution-service';
+import { queueExecutionService } from '@/features/campaigns/execution-service';
 import { audienceFiltersSchema } from '@/features/campaigns/schemas';
 import { resetDatabase, testPrisma } from '../helpers/db';
 import {
@@ -379,11 +379,26 @@ describe('red team — conteúdo hostil', () => {
   });
 });
 
-describe('red team — execução ainda não existe', () => {
-  it('enfileirar recusa explicitamente em vez de fingir sucesso', async () => {
-    await expect(pendingExecutionService.enqueueCampaign('qualquer')).rejects.toMatchObject({
-      code: 'NOT_CONFIGURED',
-    });
+describe('red team — enfileiramento exige campanha em execução', () => {
+  beforeEach(async () => {
+    await resetDatabase();
+  });
+
+  it('campanha em rascunho não pode ser enfileirada', async () => {
+    const context = await tenantReady('rt-enq-draft');
+
+    await expect(
+      queueExecutionService.enqueueCampaign(context.tenant.workspaceId, context.campaign.id),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('campanha de outro workspace não pode ser enfileirada', async () => {
+    const alvo = await tenantReady('rt-enq-a');
+    const atacante = await seedTenant('rt-enq-b');
+
+    await expect(
+      queueExecutionService.enqueueCampaign(atacante.workspaceId, alvo.campaign.id),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
 
