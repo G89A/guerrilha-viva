@@ -2,12 +2,13 @@
 
 Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business.
 
-**Estado atual: SPRINT 5 concluída.** Plataforma (auth, workspaces, RBAC,
+**Estado atual: SPRINT 6 concluída.** Plataforma (auth, workspaces, RBAC,
 auditoria), CRM e compliance (contatos, listas, tags, consentimentos, supressão,
-importação CSV), integração WhatsApp Cloud API com templates, webhooks e Inbox,
-motor de campanhas e — nesta sprint — **fila, workers e disparo em massa**:
-enfileiramento idempotente, reserva de job com recuperação de worker morto,
-retentativa com backoff, vazão por canal e progresso na tela.
+importação CSV), integração WhatsApp Cloud API com templates e webhooks, motor de
+campanhas, fila e disparo em massa, e — nesta sprint — a **Inbox de atendimento**:
+responsável, notas internas, respostas rápidas, paginação por cursor, mídia sob
+demanda e confirmação de leitura. O processamento de webhook saiu de dentro da
+requisição e virou job com retentativa.
 
 `/analytics` ainda **não** existe, e a interface diz isso em vez de simular.
 
@@ -102,6 +103,14 @@ Destaques da suíte:
 - `tests/integration/execution-redteam.test.ts` — job forjado de outro
   workspace, job duplicado com chave diferente, campanha ressuscitada, canal
   apagado no meio do ciclo.
+- `tests/integration/webhook-queue.test.ts` — recepção enfileira sem aplicar,
+  worker aplica, estados terminais não reprocessam, 6/20/50 entregas simultâneas.
+- `tests/integration/inbox-collaboration.test.ts` — responsável, notas, respostas
+  rápidas, paginação por cursor e contadores.
+- `tests/integration/inbox-media.test.ts` — allowlist de tipo e de host, teto de
+  tamanho, confirmação de leitura só depois do aceite da Meta.
+- `tests/integration/inbox-redteam.test.ts` — job forjado, payload de evento
+  adulterado para outro número, mime forjado, conteúdo hostil do WhatsApp.
 
 ## Variáveis de ambiente
 
@@ -198,14 +207,12 @@ Regras que valem a pena conhecer antes de mexer:
 - Templates nunca são marcados como aprovados localmente (ADR 0005); os que
   somem da Meta viram `UNAVAILABLE` em vez de serem apagados (ADR 0013).
 
-## Webhooks e Inbox
+## Webhooks
 
 | Rota | O que faz |
 |---|---|
 | `GET /api/webhooks/meta/whatsapp` | Verificação por challenge exigida pela Meta |
 | `POST /api/webhooks/meta/whatsapp` | Recepção de status de entrega e mensagens recebidas |
-| `/inbox` | Lista de conversas com busca, filtros e não lidas |
-| `/inbox/[id]` | Histórico, ficha do contato e resposta manual |
 
 Regras que valem a pena conhecer antes de mexer:
 
@@ -220,10 +227,43 @@ Regras que valem a pena conhecer antes de mexer:
 - **Status só avança.** `READ` seguido de `DELIVERED` permanece `READ`.
 - **Desconhecido que escreve vira contato com consentimento `UNKNOWN`**
   (ADR 0015). Responder é permitido; campanha não.
-- **Conteúdo de mensagem é hostil por definição.** É renderizado como texto pelo
-  React; `dangerouslySetInnerHTML` não existe nesta árvore e não deve entrar.
+- **A rota só persiste e enfileira.** O efeito é aplicado pelo worker
+  (ADR 0021), que pode retentar com backoff — dentro do handler não haveria
+  segunda chance. A resposta traz `queued`, não `processed`.
+- **O evento gravado basta sozinho** para ser reprocessado minutos depois.
+  Eventos gravados antes da Sprint 6 continuam legíveis pelo formato antigo.
 - Resposta livre só dentro da janela de 24 horas da Meta, calculada de
   `lastInboundAt` — nunca presumida aberta.
+
+## Inbox
+
+| Rota | O que faz |
+|---|---|
+| `/inbox` | Lista de conversas com filtros, contadores e paginação por cursor |
+| `/inbox/[id]` | Conversa, ficha do contato, notas internas e resposta |
+| `/settings/quick-replies` | Cadastro das respostas rápidas do workspace |
+| `/api/inbox/media/[messageId]` | Serve mídia recebida, autenticado e sob demanda |
+
+O que vale saber antes de mexer:
+
+- **O webhook não aplica efeito dentro da requisição.** Ele valida, persiste e
+  enfileira (ADR 0021); quem aplica é o worker. **Sem worker rodando, a Inbox não
+  anda** — nada se perde, mas nada aparece. A tela de integrações mostra a fila.
+- **Há um caminho de processamento só.** Reprocessar um evento pela tela
+  reenfileira; não existe atalho síncrono que possa divergir do normal.
+- **Mídia é buscada na hora e não é armazenada** (ADR 0022). Só imagem, vídeo,
+  áudio e PDF são servidos, com `nosniff` — o mime vem do WhatsApp e é texto de
+  terceiro.
+- **Existem três conceitos de "lido"** e eles são diferentes de propósito: o
+  contador do CRM, o status `READ` que a Meta manda sobre o que NÓS enviamos, e a
+  confirmação que NÓS mandamos à Meta (ADR 0023). Abrir a conversa mexe só no
+  primeiro.
+- **Nota interna nunca sai.** Não existe caminho de nota para o provider, e há
+  teste afirmando que criar nota não cria mensagem.
+- **Resposta rápida preenche o campo, nunca envia.**
+- **Todo conteúdo da conversa é texto não confiável.** É renderizado por
+  interpolação do React; `dangerouslySetInnerHTML` não aparece nessa árvore e não
+  deve ser introduzido.
 
 ## Campanhas
 
@@ -256,9 +296,9 @@ Regras que valem a pena conhecer antes de mexer:
 
 ## Fila e envio
 
-O disparo acontece fora da requisição HTTP, numa fila durável em PostgreSQL
-(ADR 0018). Há dois jeitos de rodar o worker — os dois chamam a **mesma** função
-de ciclo:
+O disparo — e, desde a Sprint 6, o processamento de webhook — acontece fora da
+requisição HTTP, numa fila durável em PostgreSQL (ADR 0018). Há dois jeitos de
+rodar o worker, e os dois chamam a **mesma** função de ciclo:
 
 ```bash
 npm run worker                     # processo contínuo (VM, contêiner)
@@ -272,6 +312,9 @@ curl -X POST -H "Authorization: Bearer $WORKER_TOKEN" \
 
 Sem `WORKER_TOKEN` configurado o endpoint responde `503` e **não** executa nada:
 não existe modo sem autenticação para uma rota que envia mensagem de verdade.
+
+**O worker não é opcional.** Sem ele, campanhas ficam enfileiradas e a Inbox não
+recebe mensagem nova — tudo continua durável, e nada aparece.
 
 O que vale saber antes de mexer:
 
@@ -307,6 +350,7 @@ O que vale saber antes de mexer:
 - `docs/sprint-3-report.md` — relatório da Sprint 3, com limitações conhecidas
 - `docs/sprint-4-report.md` — relatório da Sprint 4, com limitações conhecidas
 - `docs/sprint-5-report.md` — relatório da Sprint 5, com limitações conhecidas
+- `docs/sprint-6-report.md` — relatório da Sprint 6, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
@@ -317,6 +361,9 @@ sprint responsável, em vez de um link que levaria a uma tela quebrada.
 Também não existe **agendamento automático**: `scheduledAt` é validado e
 gravado, mas ninguém inicia a campanha sozinho quando a hora chega — iniciar
 continua sendo ato do operador.
+
+A Inbox **não tem tempo real**: a tela não recebe mensagem nova sozinha, é
+preciso recarregar ou navegar. Não há WebSocket nem SSE.
 
 A integração com a Meta está **implementada mas não validada contra credenciais
 reais**: toda a lógica é exercitada contra fixtures no formato documentado e
