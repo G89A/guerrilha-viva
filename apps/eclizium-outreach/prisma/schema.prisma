@@ -94,6 +94,8 @@ model Workspace {
   auditLogs          AuditLog[]
   consents           ContactConsent[]
   campaignRecipients CampaignRecipient[]
+  jobs               Job[]
+  rateLimitBuckets   RateLimitBucket[]
 
   @@map("workspaces")
 }
@@ -386,7 +388,11 @@ model MessagingChannel {
 
   /// Versão da Graph API usada por este canal. Configurável por workspace para
   /// que uma migração de versão não seja um big bang.
-  graphApiVersion String @default("v21.0") @map("graph_api_version")
+  graphApiVersion   String @default("v21.0") @map("graph_api_version")
+  /// Vazão de envio deste canal. Ajustável ao tier da conta na Meta; existe
+  /// para respeitar o limite do provider, não para disfarçar automação.
+  messagesPerSecond Float  @default(10) @map("messages_per_second")
+  sendBurst         Float  @default(20) @map("send_burst")
 
   credentialSource  CredentialSource @default(ENVIRONMENT) @map("credential_source")
   /// AES-256-GCM. Só é preenchido quando credentialSource = ENCRYPTED.
@@ -606,6 +612,8 @@ model Campaign {
   eligibleRecipients   Int @default(0) @map("eligible_recipients")
   suppressedRecipients Int @default(0) @map("suppressed_recipients")
   invalidRecipients    Int @default(0) @map("invalid_recipients")
+  sentRecipients       Int @default(0) @map("sent_recipients")
+  failedRecipients     Int @default(0) @map("failed_recipients")
 
   lastDryRunAt DateTime? @map("last_dry_run_at")
 
@@ -811,6 +819,97 @@ model Message {
   @@index([workspaceId, status])
   @@index([campaignId, status])
   @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// Fila de trabalho
+// ---------------------------------------------------------------------------
+
+enum JobStatus {
+  /// Esperando ser pego por um worker.
+  PENDING
+  /// Reservado por um worker até `leasedUntil`. Expirado o prazo, volta a ser
+  /// elegível — um worker que morreu no meio não trava o job para sempre.
+  LEASED
+  DONE
+  /// Falhou desta vez; será tentado de novo em `runAt`.
+  FAILED
+  /// Esgotou as tentativas ou falhou de forma não retentável. Fim da linha.
+  DEAD
+}
+
+enum JobType {
+  CAMPAIGN_SEND
+}
+
+/// Item de trabalho durável.
+///
+/// O `payload` carrega apenas IDENTIFICADORES. O worker relê tudo do banco
+/// antes de agir: o conteúdo do job é um ponteiro, nunca a fonte da verdade.
+model Job {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  type        JobType
+  status      JobStatus @default(PENDING)
+  payload     Json      @default("{}")
+
+  /// Quando este job pode ser executado. É o que implementa tanto o
+  /// agendamento quanto o backoff entre tentativas.
+  runAt    DateTime @default(now()) @map("run_at")
+  priority Int      @default(0)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5) @map("max_attempts")
+
+  /// Identifica o worker que reservou e até quando vale a reserva.
+  leasedBy    String?   @map("leased_by")
+  leasedUntil DateTime? @map("leased_until")
+
+  lastError     String?   @map("last_error")
+  lastErrorCode String?   @map("last_error_code")
+  completedAt   DateTime? @map("completed_at")
+
+  /// Enfileirar duas vezes a mesma intenção não cria dois jobs.
+  idempotencyKey String @unique @map("idempotency_key")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// Índice do leasing: o worker busca por (status, runAt).
+  @@index([status, runAt, priority])
+  @@index([workspaceId, status])
+  @@index([leasedUntil])
+  @@map("jobs")
+}
+
+/// Token bucket de vazão, compartilhado entre processos.
+///
+/// O limitador em memória (`InMemoryRateLimiter`) é por processo e está
+/// documentado como insuficiente para envio. Aqui o estado vive no banco, então
+/// vários workers respeitam o MESMO teto.
+///
+/// Existe para respeitar o limite do provider e proteger a reputação do número.
+/// NÃO é, e não deve virar, mecanismo de evasão de detecção.
+model RateLimitBucket {
+  /// Chave do balde, tipicamente `channel:<id>`.
+  key         String @id
+  workspaceId String @map("workspace_id")
+
+  /// Tokens disponíveis agora e quando foram recalculados pela última vez.
+  tokens        Float    @default(0)
+  refilledAt    DateTime @default(now()) @map("refilled_at")
+  /// Tokens por segundo e teto do balde.
+  ratePerSecond Float    @default(10) @map("rate_per_second")
+  burst         Float    @default(20)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("rate_limit_buckets")
 }
 
 // ---------------------------------------------------------------------------
