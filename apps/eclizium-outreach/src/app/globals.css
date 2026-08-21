@@ -30,6 +30,27 @@
   --input: oklch(0.92 0.004 260);
   --ring: oklch(0.51 0.19 265);
   --radius: 0.5rem;
+
+  /*
+   * Paleta de gráficos.
+   *
+   * Categórica (3 séries: enviadas, entregues, lidas) e o par divergente
+   * (entradas x saídas da base). Validada com o script de seis checagens do
+   * método de dataviz, contra a superfície de cartão de cada modo — não
+   * escolhida a olho.
+   *
+   * Claro (superfície #ffffff), all-pairs: CVD dE mínimo 9.2, visão normal 24.0.
+   * `--chart-3` fica em 2.82:1 de contraste, abaixo de 3:1 — por isso as linhas
+   * levam rótulo direto na ponta, que é a compensação exigida. Não remova os
+   * rótulos sem trocar a cor.
+   */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-positive: #2a78d6;
+  --chart-negative: #e34948;
+  --chart-critical: #d03b3b;
+  --chart-grid: oklch(0.92 0.004 260);
 }
 
 .dark {
@@ -54,6 +75,17 @@
   --border: oklch(0.29 0.01 260);
   --input: oklch(0.31 0.01 260);
   --ring: oklch(0.68 0.16 265);
+
+  /* Mesmas matizes, degraus escolhidos para a superfície escura (#16181d) e
+     validados como conjunto: CVD dE mínimo 9.4, visão normal 20.9, e as três
+     acima de 3:1 de contraste. Não é o claro invertido. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-positive: #3987e5;
+  --chart-negative: #e66767;
+  --chart-critical: #d03b3b;
+  --chart-grid: oklch(0.29 0.01 260);
 }
 
 @theme inline {
@@ -78,6 +110,13 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-positive: var(--chart-positive);
+  --color-chart-negative: var(--chart-negative);
+  --color-chart-critical: var(--chart-critical);
+  --color-chart-grid: var(--chart-grid);
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
