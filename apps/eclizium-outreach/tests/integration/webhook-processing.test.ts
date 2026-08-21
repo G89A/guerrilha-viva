@@ -9,8 +9,6 @@ import {
   MessageType,
   WebhookEventStatus,
 } from '@prisma/client';
-import { handleEvent } from '@/features/webhooks/processor';
-import { parseWebhookPayload } from '@/features/webhooks/parser';
 import { resetDatabase, testPrisma } from '../helpers/db';
 import { seedChannel, seedEligibleContact, seedTemplate, seedTenant } from '../helpers/factories';
 import {
@@ -22,17 +20,13 @@ import {
   textMessagePayload,
   unknownFieldPayload,
 } from '../helpers/webhook-fixtures';
+import { deliverPayload } from '../helpers/webhook-delivery';
 
-/** Entrega um payload inteiro como a rota faria, evento a evento. */
+/** Entrega um payload como a rota faria e roda o worker até drenar. */
 async function deliver(payload: unknown) {
-  const parsed = parseWebhookPayload(JSON.stringify(payload));
-  if (!parsed.ok) throw new Error(`payload inválido: ${parsed.reason}`);
-
-  const outcomes = [];
-  for (const event of parsed.events) {
-    outcomes.push(await handleEvent(event, { signatureValid: true }));
-  }
-  return outcomes;
+  const result = await deliverPayload(payload);
+  if (result.rejected) throw new Error(`payload inválido: ${result.rejected}`);
+  return result.outcomes;
 }
 
 /** Workspace com canal cujo phoneNumberId casa com as fixtures. */
@@ -111,7 +105,7 @@ describe('status de mensagem', () => {
     await tenantWithChannel('st-unknown');
     const [outcome] = await deliver(statusPayload({ wamid: 'wamid.NAO_EXISTE', status: 'read' }));
 
-    expect(outcome?.result).toBe('IGNORED');
+    expect(outcome).toBe('IGNORED');
     const event = await testPrisma().webhookEvent.findFirstOrThrow({});
     expect(event.status).toBe(WebhookEventStatus.IGNORED);
   });
@@ -164,8 +158,8 @@ describe('idempotência de entrega', () => {
     const [primeira] = await deliver(payload);
     const [segunda] = await deliver(payload);
 
-    expect(primeira?.result).toBe('PROCESSED');
-    expect(segunda?.result).toBe('DUPLICATE');
+    expect(primeira).toBe('PROCESSED');
+    expect(segunda).toBe('DUPLICATE');
 
     // Um único WebhookEvent, um único efeito.
     await expect(testPrisma().webhookEvent.count()).resolves.toBe(1);
@@ -190,7 +184,7 @@ describe('idempotência de entrega', () => {
     await deliver(payload);
     const [segunda] = await deliver(payload);
 
-    expect(segunda?.result).toBe('DUPLICATE');
+    expect(segunda).toBe('DUPLICATE');
     await expect(
       testPrisma().message.count({ where: { workspaceId: tenant.workspaceId } }),
     ).resolves.toBe(1);
@@ -213,7 +207,7 @@ describe('mensagem recebida', () => {
     const [outcome] = await deliver(
       textMessagePayload({ wamid: 'wamid.IN1', body: 'Quero um orçamento' }),
     );
-    expect(outcome?.result).toBe('PROCESSED');
+    expect(outcome).toBe('PROCESSED');
 
     const contact = await testPrisma().contact.findFirstOrThrow({
       where: { workspaceId: tenant.workspaceId },
@@ -340,7 +334,7 @@ describe('eventos não suportados e canal desconhecido', () => {
     await tenantWithChannel('unk-1');
     const [outcome] = await deliver(unknownFieldPayload());
 
-    expect(outcome?.result).toBe('IGNORED');
+    expect(outcome).toBe('IGNORED');
     const event = await testPrisma().webhookEvent.findFirstOrThrow({});
     expect(event.status).toBe(WebhookEventStatus.IGNORED);
     expect(event.eventType).toBe('UNKNOWN_EVENT');
@@ -352,7 +346,7 @@ describe('eventos não suportados e canal desconhecido', () => {
       textMessagePayload({ wamid: 'wamid.NOCH', phoneNumberId: '999999999999999' }),
     );
 
-    expect(outcome?.result).toBe('IGNORED');
+    expect(outcome).toBe('IGNORED');
     const event = await testPrisma().webhookEvent.findFirstOrThrow({});
     expect(event.workspaceId).toBeNull();
     expect(event.status).toBe(WebhookEventStatus.IGNORED);
@@ -378,7 +372,7 @@ describe('eventos não suportados e canal desconhecido', () => {
     const outcomes = await deliver(multiEventPayload());
 
     expect(outcomes).toHaveLength(3);
-    expect(outcomes.every((outcome) => outcome.result === 'PROCESSED')).toBe(true);
+    expect(outcomes.every((outcome) => outcome === 'PROCESSED')).toBe(true);
     await expect(testPrisma().webhookEvent.count()).resolves.toBe(3);
   });
 });

@@ -1,26 +1,31 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MessageDirection, MessageStatus, MessageType, WebhookEventStatus } from '@prisma/client';
-import { handleEvent } from '@/features/webhooks/processor';
 import { parseWebhookPayload } from '@/features/webhooks/parser';
 import { computeSignature, verifySignature } from '@/features/webhooks/signature';
-import { listConversations } from '@/features/messaging/inbox-query';
+import { listConversations as listConversationsPage } from '@/features/messaging/inbox-query';
 import { resetDatabase, testPrisma } from '../helpers/db';
 import { seedChannel, seedEligibleContact, seedTenant } from '../helpers/factories';
 import { PHONE_NUMBER_ID, statusPayload, textMessagePayload } from '../helpers/webhook-fixtures';
+import { deliverPayload } from '../helpers/webhook-delivery';
 
 /**
  * Red team do Sprint 3. Cada teste descreve o ataque e o comportamento correto.
  */
 
 async function deliver(payload: unknown) {
-  const parsed = parseWebhookPayload(JSON.stringify(payload));
-  if (!parsed.ok) return { rejected: parsed.reason, outcomes: [] };
+  return deliverPayload(payload);
+}
 
-  const outcomes = [];
-  for (const event of parsed.events) {
-    outcomes.push(await handleEvent(event, { signatureValid: true }));
-  }
-  return { rejected: null, outcomes };
+/**
+ * Só os itens da página. A paginação por cursor tem teste próprio; aqui o que
+ * interessa é o conteúdo da lista.
+ */
+async function listConversations(
+  workspaceId: string,
+  filters?: Parameters<typeof listConversationsPage>[1],
+) {
+  const page = await listConversationsPage(workspaceId, filters);
+  return page.items;
 }
 
 async function tenantWithChannel(label: string) {
@@ -45,9 +50,7 @@ describe('red team — payload hostil', () => {
     await tenantWithChannel(`rt-${label.slice(0, 5)}`);
     const parsed = parseWebhookPayload(body);
 
-    if (parsed.ok) {
-      for (const event of parsed.events) await handleEvent(event, { signatureValid: true });
-    }
+    if (parsed.ok) await deliverPayload(body);
 
     await expect(testPrisma().message.count()).resolves.toBe(0);
     await expect(testPrisma().contact.count()).resolves.toBe(0);
@@ -94,7 +97,7 @@ describe('red team — payload hostil', () => {
     };
 
     const { outcomes } = await deliver(payload);
-    expect(outcomes[0]?.result).toBe('PROCESSED');
+    expect(outcomes[0]).toBe('PROCESSED');
 
     const message = await testPrisma().message.findFirstOrThrow({
       where: { workspaceId: tenant.workspaceId },
@@ -243,7 +246,7 @@ describe('red team — cross tenant e replay', () => {
       textMessagePayload({ wamid: 'rt.GHOST', phoneNumberId: '000000000000000' }),
     );
 
-    expect(outcomes[0]?.result).toBe('IGNORED');
+    expect(outcomes[0]).toBe('IGNORED');
     await expect(testPrisma().contact.count()).resolves.toBe(0);
     const event = await testPrisma().webhookEvent.findFirstOrThrow({});
     expect(event.workspaceId).toBeNull();
@@ -364,7 +367,7 @@ describe('red team — estado inconsistente', () => {
 
     // Um status chegando para o wamid de uma mensagem RECEBIDA.
     const { outcomes } = await deliver(statusPayload({ wamid: 'wamid.INB', status: 'read' }));
-    expect(outcomes[0]?.result).toBe('IGNORED');
+    expect(outcomes[0]).toBe('IGNORED');
 
     const message = await testPrisma().message.findFirstOrThrow({
       where: { workspaceId: tenant.workspaceId, providerMessageId: 'wamid.INB' },

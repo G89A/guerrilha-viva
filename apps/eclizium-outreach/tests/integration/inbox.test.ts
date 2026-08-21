@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ConversationStatus, MessageDirection, MessageStatus } from '@prisma/client';
-import { handleEvent } from '@/features/webhooks/processor';
-import { parseWebhookPayload } from '@/features/webhooks/parser';
 import {
   getConversationDetail,
-  listConversations,
+  listConversations as listConversationsPage,
   unreadTotal,
 } from '@/features/messaging/inbox-query';
 import {
@@ -16,14 +14,24 @@ import { sendReply } from '@/features/messaging/reply-service';
 import { resetDatabase, testPrisma } from '../helpers/db';
 import { seedChannel, seedTenant } from '../helpers/factories';
 import { fakeGraph, metaError, SEND_SUCCESS_RESPONSE } from '../helpers/fake-graph';
+import { deliverPayload } from '../helpers/webhook-delivery';
 import { PHONE_NUMBER_ID, textMessagePayload } from '../helpers/webhook-fixtures';
 
 async function deliver(payload: unknown) {
-  const parsed = parseWebhookPayload(JSON.stringify(payload));
-  if (!parsed.ok) throw new Error(parsed.reason);
-  for (const event of parsed.events) {
-    await handleEvent(event, { signatureValid: true });
-  }
+  const result = await deliverPayload(payload);
+  if (result.rejected) throw new Error(result.rejected);
+}
+
+/**
+ * Só os itens da página. A paginação por cursor tem teste próprio; aqui o que
+ * interessa é o conteúdo da lista.
+ */
+async function listConversations(
+  workspaceId: string,
+  filters?: Parameters<typeof listConversationsPage>[1],
+) {
+  const page = await listConversationsPage(workspaceId, filters);
+  return page.items;
 }
 
 async function tenantWithChannel(label: string) {
