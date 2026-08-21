@@ -123,3 +123,72 @@ export function serviceWindow(lastInboundAt: Date | null, now: Date = new Date()
   const expiresAt = new Date(lastInboundAt.getTime() + SERVICE_WINDOW_MS);
   return { open: expiresAt.getTime() > now.getTime(), expiresAt };
 }
+
+/**
+ * Define (ou remove) o responsável pela conversa.
+ *
+ * O id do responsável é validado contra os membros DO WORKSPACE. Aceitar o id
+ * como veio permitiria atribuir uma conversa a alguém de outro tenant — que
+ * passaria a vê-la em "minhas conversas".
+ */
+export async function assignConversation(input: {
+  workspaceId: string;
+  conversationId: string;
+  assigneeId: string | null;
+  now?: Date;
+}): Promise<{ changed: boolean; reason?: string }> {
+  if (input.assigneeId) {
+    const member = await prisma.workspaceMember.findFirst({
+      where: { workspaceId: input.workspaceId, userId: input.assigneeId },
+      select: { id: true },
+    });
+    if (!member) return { changed: false, reason: 'Usuário não pertence a este workspace.' };
+  }
+
+  const result = await prisma.conversation.updateMany({
+    where: { id: input.conversationId, workspaceId: input.workspaceId },
+    data: {
+      assigneeId: input.assigneeId,
+      assignedAt: input.assigneeId ? (input.now ?? new Date()) : null,
+    },
+  });
+
+  return { changed: result.count > 0 };
+}
+
+export const MAX_NOTE_LENGTH = 2_000;
+
+/**
+ * Registra uma nota interna.
+ *
+ * A conversa é resolvida DENTRO do workspace antes de gravar: sem isso, um id
+ * de conversa alheia criaria uma nota no tenant errado.
+ */
+export async function addConversationNote(input: {
+  workspaceId: string;
+  conversationId: string;
+  authorId: string;
+  body: string;
+}): Promise<{ created: boolean; noteId?: string; reason?: string }> {
+  const body = input.body.trim();
+  if (body.length === 0) return { created: false, reason: 'Nota vazia.' };
+  if (body.length > MAX_NOTE_LENGTH) return { created: false, reason: 'Nota longa demais.' };
+
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: input.conversationId, workspaceId: input.workspaceId },
+    select: { id: true },
+  });
+  if (!conversation) return { created: false, reason: 'Conversa não encontrada.' };
+
+  const note = await prisma.conversationNote.create({
+    data: {
+      workspaceId: input.workspaceId,
+      conversationId: conversation.id,
+      authorId: input.authorId,
+      body,
+    },
+    select: { id: true },
+  });
+
+  return { created: true, noteId: note.id };
+}
