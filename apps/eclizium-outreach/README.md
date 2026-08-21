@@ -102,8 +102,8 @@ META_PHONE_NUMBER_ID
 META_WABA_ID
 META_GRAPH_API_VERSION
 META_CREDENTIAL_KEY          (opcional — ver ADR 0011)
-META_WEBHOOK_VERIFY_TOKEN    (Sprint 3)
-META_APP_SECRET              (Sprint 3)
+META_WEBHOOK_VERIFY_TOKEN    (webhook: challenge de verificação)
+META_APP_SECRET              (webhook: validação de assinatura)
 ```
 
 Enquanto qualquer uma faltar, o produto reporta `NOT_CONFIGURED` e recusa
@@ -179,20 +179,49 @@ Regras que valem a pena conhecer antes de mexer:
 - Templates nunca são marcados como aprovados localmente (ADR 0005); os que
   somem da Meta viram `UNAVAILABLE` em vez de serem apagados (ADR 0013).
 
+## Webhooks e Inbox
+
+| Rota | O que faz |
+|---|---|
+| `GET /api/webhooks/meta/whatsapp` | Verificação por challenge exigida pela Meta |
+| `POST /api/webhooks/meta/whatsapp` | Recepção de status de entrega e mensagens recebidas |
+| `/inbox` | Lista de conversas com busca, filtros e não lidas |
+| `/inbox/[id]` | Histórico, ficha do contato e resposta manual |
+
+Regras que valem a pena conhecer antes de mexer:
+
+- **Assinatura primeiro.** O corpo é lido cru (`request.text()`) antes de
+  qualquer parse — reserializar mudaria os bytes e invalidaria o HMAC. Sem
+  `META_APP_SECRET` configurado, o endpoint recusa: aceitar webhook não
+  verificado permitiria injetar mensagens e status falsos.
+- **O workspace vem do `phone_number_id`**, resolvido contra `MessagingChannel`.
+  Nenhum identificador de workspace do payload é aceito.
+- **Idempotência é por evento, não por entrega** (ADR 0014). Reentrega, replay e
+  rajada concorrente produzem um efeito só.
+- **Status só avança.** `READ` seguido de `DELIVERED` permanece `READ`.
+- **Desconhecido que escreve vira contato com consentimento `UNKNOWN`**
+  (ADR 0015). Responder é permitido; campanha não.
+- **Conteúdo de mensagem é hostil por definição.** É renderizado como texto pelo
+  React; `dangerouslySetInnerHTML` não existe nesta árvore e não deve entrar.
+- Resposta livre só dentro da janela de 24 horas da Meta, calculada de
+  `lastInboundAt` — nunca presumida aberta.
+
 ## Documentação
 
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
 - `docs/sprint-0-report.md` — relatório de encerramento da Sprint 0
 - `docs/sprint-1-report.md` — relatório da Sprint 1, com limitações conhecidas
 - `docs/sprint-2-report.md` — relatório da Sprint 2, com limitações conhecidas
+- `docs/sprint-3-report.md` — relatório da Sprint 3, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
 
-`/campaigns`, `/inbox` e `/analytics` não existem. A navegação lateral mostra
-essas seções desabilitadas, com a sprint responsável, em vez de links que
-levariam a telas quebradas.
+`/campaigns` e `/analytics` não existem. A navegação lateral mostra essas seções
+desabilitadas, com a sprint responsável, em vez de links que levariam a telas
+quebradas.
 
-Webhooks da Meta (entrega, leitura, mensagens recebidas) são da Sprint 3.
-Enquanto isso, uma mensagem enviada para em `SENT` — o produto não simula
-`DELIVERED` nem `READ`.
+A integração com a Meta está **implementada mas não validada contra credenciais
+reais**: toda a lógica é exercitada contra fixtures no formato documentado e
+contra a rota HTTP real, mas nenhum webhook verdadeiro da Meta chegou a este
+sistema e nenhum `wamid` aqui veio de um envio real.
