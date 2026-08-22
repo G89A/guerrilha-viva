@@ -158,6 +158,17 @@ export interface SendMessageResult {
 // Provider
 // ---------------------------------------------------------------------------
 
+/**
+ * Saúde do número segundo a Meta.
+ *
+ * `qualityRating` nulo é o estado honesto quando a Meta não informou ou informou
+ * algo que não sabemos mapear. Nunca presumimos "bom".
+ */
+export interface ProviderNumberHealth {
+  qualityRating: string | null;
+  messagingLimitTier: string | null;
+}
+
 /** Binário de mídia recebida, buscado sob demanda. Nunca é armazenado. */
 export interface ProviderMedia {
   bytes: Uint8Array;
@@ -173,6 +184,8 @@ export interface MessagingProvider {
   sendText?(input: SendTextInput): Promise<SendMessageResult>;
   /** Confirma ao provedor que a mensagem do contato foi lida pela equipe. */
   markRead?(providerMessageId: string): Promise<void>;
+  /** Qualidade e limite do número, como a Meta os classifica hoje. */
+  readNumberHealth?(): Promise<ProviderNumberHealth>;
   /** Busca o binário de uma mídia recebida. O provedor é a única fonte. */
   fetchMedia?(mediaId: string, maxBytes: number): Promise<ProviderMedia>;
 }

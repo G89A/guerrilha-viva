@@ -4,6 +4,7 @@ import {
   type ProviderCheck,
   type ProviderConnectionResult,
   type ProviderMedia,
+  type ProviderNumberHealth,
   type ProviderName,
   type ProviderTemplate,
   type ProviderTemplateButton,
@@ -297,6 +298,28 @@ export class MetaWhatsAppProvider implements MessagingProvider {
   }
 
   /**
+   * Lê qualidade e limite do número.
+   *
+   * A Meta classifica a qualidade a partir do comportamento de quem recebe —
+   * bloqueios e denúncias. É o termômetro que antecede a restrição do número, e
+   * por isso vale consultar antes de disparar, não depois.
+   */
+  async readNumberHealth(): Promise<ProviderNumberHealth> {
+    const response = await this.client.request<PhoneHealthResponse>({
+      method: 'GET',
+      path: this.phoneNumberId,
+      query: { fields: 'quality_rating,messaging_limit_tier' },
+      operation: 'phone_number.health',
+    });
+
+    return {
+      qualityRating: typeof response?.quality_rating === 'string' ? response.quality_rating : null,
+      messagingLimitTier:
+        typeof response?.messaging_limit_tier === 'string' ? response.messaging_limit_tier : null,
+    };
+  }
+
+  /**
    * Busca o binário de uma mídia recebida, em dois passos.
    *
    * A Meta não devolve o arquivo direto: primeiro entrega uma URL temporária
@@ -337,6 +360,11 @@ export class MetaWhatsAppProvider implements MessagingProvider {
       sizeBytes: binary.bytes.byteLength,
     };
   }
+}
+
+interface PhoneHealthResponse {
+  quality_rating?: unknown;
+  messaging_limit_tier?: unknown;
 }
 
 interface MediaDescriptor {

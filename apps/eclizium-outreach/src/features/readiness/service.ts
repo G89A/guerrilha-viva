@@ -10,6 +10,8 @@ import {
 import { prisma } from '@/lib/db/client';
 import { findChannel } from '@/features/messaging/channel-service';
 import { describeCredentials } from '@/features/messaging/credentials';
+import { getSendingPolicy } from '@/features/protection/policy-service';
+import { numberHealth } from '@/features/protection/health-service';
 
 /**
  * Prontidão para disparo em massa.
@@ -93,6 +95,9 @@ export async function assessSendReadiness(
       }),
       prisma.job.count({ where: { workspaceId, status: JobStatus.DEAD } }),
     ]);
+
+  const policy = await getSendingPolicy(workspaceId);
+  const health = await numberHealth(workspaceId, policy, now);
 
   const credentials = channel ? describeCredentials(channel) : null;
   const channelComplete = Boolean(
@@ -200,6 +205,25 @@ export async function assessSendReadiness(
       'Rode `npm run worker` em processo contínuo, ou configure um cron chamando POST /api/internal/worker/tick com o WORKER_TOKEN.',
   });
 
+  // A qualidade do número entra na prontidão porque é o único item que pode
+  // BLOQUEAR o envio sem nada estar mal configurado.
+  if (health) {
+    checks.push({
+      id: 'quality',
+      label: 'Qualidade do número na Meta',
+      state: health.blocksSending ? 'FALTA' : health.stale ? 'ATENCAO' : 'OK',
+      detail: health.blocksSending
+        ? `Qualidade ${health.quality} e a política manda parar. Nenhuma campanha sai assim.`
+        : health.checkedAt === null
+          ? 'Nunca consultada. A Meta rebaixa a qualidade antes de restringir o número.'
+          : health.stale
+            ? 'Leitura antiga demais para descrever o estado de agora.'
+            : `Qualidade ${health.quality}${health.tier ? `, limite ${health.tier}` : ''}.`,
+      action: 'Consulte a qualidade em Configurações → Proteção do número.',
+      href: '/settings/protection',
+    });
+  }
+
   if (deadJobs > 0) {
     checks.push({
       id: 'dead',
@@ -215,7 +239,7 @@ export async function assessSendReadiness(
   // entrega), mas não impede a mensagem de sair.
   //
   // ATENCAO não bloqueia: é aviso, não impedimento. FALTA bloqueia.
-  const blocking = ['channel', 'connection', 'template', 'audience', 'worker'];
+  const blocking = ['channel', 'connection', 'template', 'audience', 'worker', 'quality'];
   const readyToSend = checks
     .filter((check) => blocking.includes(check.id))
     .every((check) => check.state !== 'FALTA');

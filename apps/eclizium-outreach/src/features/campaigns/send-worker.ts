@@ -22,6 +22,8 @@ import {
 } from '@/features/campaigns/eligibility';
 import type { AudienceContact } from '@/features/campaigns/audience-service';
 import { channelBucketKey, consumeToken } from '@/features/queue/rate-limiter';
+import { getSendingPolicy } from '@/features/protection/policy-service';
+import { evaluateGuardrails } from '@/features/protection/guardrails';
 
 /**
  * Envio de UM destinatário de campanha.
@@ -193,6 +195,44 @@ export async function processSendJob(
   const template = campaign.template;
   if (!channel || !template) {
     return { result: 'SKIPPED', reason: 'Canal ou template indisponível.', permanent: true };
+  }
+
+  // --- Freios de proteção ---------------------------------------------------
+  //
+  // Rodam DEPOIS da reverificação de elegibilidade e ANTES de gastar token de
+  // vazão: adiar um envio por horário silencioso não pode consumir cota, e
+  // bloquear por frequência não pode aparecer como problema de vazão.
+  const policy = await getSendingPolicy(job.workspaceId);
+  const guardrail = await evaluateGuardrails({
+    workspaceId: job.workspaceId,
+    contactId: contact.id,
+    policy,
+    quality: channel.qualityRating,
+    now,
+  });
+
+  if (!guardrail.allow) {
+    if (guardrail.kind === 'DEFER') {
+      // Reaproveita o caminho de vazão: volta para a fila sem gastar tentativa
+      // e sem tocar no destinatário — não é falha dele nem nossa.
+      logger.info('campaign.send_deferred', {
+        workspaceId: job.workspaceId,
+        campaignId: campaign.id,
+        reason: guardrail.reason,
+      });
+      return { result: 'RATE_LIMITED', retryAfterMs: guardrail.retryAtMs };
+    }
+
+    await blockRecipient(recipient.id, [guardrail.reason], RecipientStatus.INELIGIBLE);
+
+    logger.info('campaign.send_blocked_by_policy', {
+      workspaceId: job.workspaceId,
+      campaignId: campaign.id,
+      recipientId: recipient.id,
+      reason: guardrail.reason,
+    });
+
+    return { result: 'SKIPPED', reason: guardrail.reason, permanent: true };
   }
 
   // --- Vazão ----------------------------------------------------------------
