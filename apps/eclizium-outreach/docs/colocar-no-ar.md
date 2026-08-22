@@ -55,7 +55,32 @@ Guarde duas URLs:
 
 6. Configure o cron do worker — **sem isso nada é enviado** (Passo 6).
 
-### Opção B — Sua máquina ou um servidor
+### Opção B — Docker, um comando
+
+Na raiz de `apps/eclizium-outreach`:
+
+```bash
+docker compose up --build
+```
+
+Sobe banco, aplica as migrations, popula dados de desenvolvimento e roda a
+aplicação **e o worker**. Acesse `http://localhost:3000` e entre com
+`owner@acme.test` / `eclizium-dev-2026`.
+
+Para disparar de verdade, passe as credenciais da Meta no ambiente antes de
+subir:
+
+```bash
+export META_ACCESS_TOKEN=... META_PHONE_NUMBER_ID=... META_WABA_ID=...
+export META_APP_SECRET=... META_WEBHOOK_VERIFY_TOKEN=...
+docker compose up --build
+```
+
+> Este compose é para **avaliação**. Os segredos nele são fixos de propósito,
+> para o comando funcionar sem configuração; em produção eles vêm do ambiente da
+> hospedagem e nunca de um arquivo versionado.
+
+### Opção C — Sua máquina, sem Docker
 
 ```bash
 cd apps/eclizium-outreach
@@ -212,6 +237,32 @@ consentimento entre preparar e enviar não recebe.
 
 ---
 
+## Proteção do número (o "antiban" que funciona)
+
+Em `Configurações → Proteção do número`. Vale a pena configurar **antes** do
+primeiro disparo, não depois do primeiro susto.
+
+| Freio | O que faz |
+|---|---|
+| Descadastro automático | Quem responde "PARAR", "SAIR", "CANCELAR" entra na supressão e tem o consentimento revogado |
+| Teto de frequência | Máximo de mensagens de campanha por contato numa janela (padrão: 4 a cada 7 dias) |
+| Horário silencioso | Campanha não sai de madrugada; o envio é adiado, não perdido (padrão: 21h–8h) |
+| Parada por qualidade | Campanha é bloqueada quando a Meta rebaixa o número para vermelho |
+
+O que derruba um número no WhatsApp **não é volume** — é gente apertando
+"Bloquear" e "Denunciar". A Meta mede isso, rebaixa a qualidade do número e
+depois restringe o envio. Todos os freios acima existem para reduzir essa
+chance.
+
+**O que este produto não faz, por decisão:** atraso aleatório para parecer
+humano, embaralhar texto para driblar antispam, aquecer número, rotacionar
+número após bloqueio, cliente não oficial. Além de proibido pela política da
+Meta, não funciona — nenhum disfarce no envio muda o que a pessoa do outro lado
+faz ao receber algo que não pediu. E rotação de número após bloqueio é o padrão
+que a Meta pune com a conta inteira, não só o número.
+
+Ver `docs/adr/0026-number-protection.md`.
+
 ## Conferindo: o painel responde
 
 Abra `/dashboard`. O cartão **Prontidão para disparo** verifica, contra o banco e
@@ -225,6 +276,7 @@ o ambiente:
 | Contatos com consentimento | há contato ativo, consentido e não suprimido |
 | Webhook recebendo eventos | ao menos um evento real chegou |
 | Worker processando a fila | há job concluído nas últimas 24 h |
+| Qualidade do número na Meta | a leitura é recente e não bloqueia o envio |
 
 Enquanto qualquer bloqueante estiver vermelho, o cartão diz **Bloqueado** e
 explica o que fazer. Ele nunca fica verde por configuração existir — fica verde

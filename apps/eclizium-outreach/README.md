@@ -2,12 +2,11 @@
 
 Plataforma multi-tenant de CRM, campanhas e mensageria WhatsApp Business.
 
-**Estado atual: SPRINT 7 concluída — motor principal completo.** Plataforma
-(auth, workspaces, RBAC, auditoria), CRM e compliance, integração WhatsApp Cloud
-API com templates e webhooks, motor de campanhas, fila e disparo em massa, Inbox
-de atendimento e — nesta sprint — **analytics e auditoria**: relatórios por
-agregação com fuso explícito, exportação CSV e o registro de auditoria
-finalmente legível.
+**Estado atual: SPRINT 8 concluída.** Plataforma, CRM e compliance, integração
+WhatsApp Cloud API, motor de campanhas, fila e disparo em massa, Inbox de
+atendimento, analytics e auditoria — e, nesta sprint, **proteção do número**:
+descadastro automático, teto de frequência, horário silencioso e parada por
+qualidade. Também há `docker compose up --build` para subir tudo com um comando.
 
 `/analytics` ainda **não** existe, e a interface diz isso em vez de simular.
 
@@ -373,6 +372,28 @@ O que vale saber antes de mexer:
   conferida contra a superfície de cada modo, com contraste, separação para
   daltonismo e visão normal. Ver `docs/adr/0024`.
 
+## Proteção do número
+
+| Rota | O que faz |
+|---|---|
+| `/settings/protection` | Política de envio e saúde do número — **ADMIN para cima** |
+
+O que derruba um número no WhatsApp **não é volume** — é gente apertando
+"Bloquear" e "Denunciar". Os freios existem para reduzir essa chance:
+
+- **Descadastro automático**: "PARAR", "SAIR", "CANCELAR" entram na supressão e
+  revogam o consentimento. A comparação é com a mensagem inteira, nunca
+  substring — "não quero parar de receber" não descadastra ninguém.
+- **Teto de frequência** por contato, contando só campanha. Resposta manual da
+  Inbox não conta: limitar atendimento seria impedir conversa.
+- **Horário silencioso**: adia o envio, não descarta.
+- **Parada por qualidade**: campanha bloqueada quando a Meta rebaixa o número.
+
+**Este produto não implementa evasão de banimento** — atraso para parecer humano,
+variação de texto, aquecimento ou rotação de número, cliente não oficial. Além de
+proibido, não funciona: nenhum disfarce no envio muda o que quem recebe faz ao
+receber algo que não pediu. Ver ADR 0026.
+
 ## Documentação
 
 - `docs/colocar-no-ar.md` — **do zero ao primeiro disparo real**: banco, deploy,
@@ -386,6 +407,7 @@ O que vale saber antes de mexer:
 - `docs/sprint-5-report.md` — relatório da Sprint 5, com limitações conhecidas
 - `docs/sprint-6-report.md` — relatório da Sprint 6, com limitações conhecidas
 - `docs/sprint-7-report.md` — relatório da Sprint 7, com limitações conhecidas
+- `docs/sprint-8-report.md` — relatório da Sprint 8, com limitações conhecidas
 - `docs/adr/` — decisões arquiteturais registradas
 
 ## Ainda não implementado
