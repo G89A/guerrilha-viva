@@ -101,6 +101,7 @@ model Workspace {
   rateLimitBuckets   RateLimitBucket[]
   conversationNotes  ConversationNote[]
   quickReplies       QuickReply[]
+  sendingPolicy      SendingPolicy?
 
   @@map("workspaces")
 }
@@ -296,6 +297,17 @@ model ContactTag {
   @@map("contact_tags")
 }
 
+/// Classificação de qualidade do número, informada pela Meta.
+///
+/// UNKNOWN é o estado honesto enquanto a Meta não respondeu ou respondeu algo
+/// que não sabemos mapear — nunca presumimos GREEN.
+enum NumberQuality {
+  UNKNOWN
+  GREEN
+  YELLOW
+  RED
+}
+
 enum SuppressionReason {
   OPT_OUT
   BLOCKED
@@ -405,6 +417,16 @@ model MessagingChannel {
   /// Prefixo/sufixo mascarado + hash curto, para o operador reconhecer qual
   /// token está em uso sem que o valor exista fora do servidor.
   tokenFingerprint  String?          @map("token_fingerprint")
+
+  /// Qualidade e limite informados pela Meta. `qualityCheckedAt` nulo significa
+
+  /// que nunca perguntamos — e a tela diz isso em vez de mostrar um selo verde.
+
+  qualityRating NumberQuality @default(UNKNOWN) @map("quality_rating")
+
+  messagingLimitTier String? @map("messaging_limit_tier")
+
+  qualityCheckedAt DateTime? @map("quality_checked_at")
 
   lastError      String?   @map("last_error")
   lastErrorCode  String?   @map("last_error_code")
@@ -1038,4 +1060,41 @@ model QuickReply {
   @@unique([workspaceId, title])
   @@index([workspaceId, title])
   @@map("quick_replies")
+}
+
+/// Política de envio do workspace.
+///
+/// São FREIOS, não disfarces. Cada regra aqui existe para reduzir a chance de
+/// alguém receber o que não pediu e apertar "Bloquear" — que é o que de fato
+/// derruba a qualidade do número. Nada aqui serve para mascarar automação,
+/// escapar de antispam ou fazer o envio parecer humano.
+model SendingPolicy {
+  id          String @id @default(cuid())
+  workspaceId String @unique @map("workspace_id")
+
+  /// Descadastro automático por palavra-chave na resposta do contato.
+  optOutEnabled  Boolean  @default(true) @map("opt_out_enabled")
+  optOutKeywords String[] @default(["PARAR", "SAIR", "CANCELAR", "DESCADASTRAR", "STOP", "REMOVER"]) @map("opt_out_keywords")
+
+  /// Teto de mensagens de campanha para o MESMO contato numa janela.
+  frequencyCapMessages   Int @default(4) @map("frequency_cap_messages")
+  frequencyCapWindowDays Int @default(7) @map("frequency_cap_window_days")
+
+  /// Horário em que não se incomoda ninguém, no fuso abaixo. Hora local, 0-23.
+  /// `quietHoursStart` maior que `quietHoursEnd` atravessa a meia-noite.
+  quietHoursEnabled Boolean @default(true) @map("quiet_hours_enabled")
+  quietHoursStart   Int     @default(21) @map("quiet_hours_start")
+  quietHoursEnd     Int     @default(8) @map("quiet_hours_end")
+  timeZone          String  @default("America/Sao_Paulo") @map("time_zone")
+
+  /// Parar sozinho quando a Meta rebaixa a qualidade do número.
+  pauseOnRedQuality    Boolean @default(true) @map("pause_on_red_quality")
+  pauseOnYellowQuality Boolean @default(false) @map("pause_on_yellow_quality")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("sending_policies")
 }
