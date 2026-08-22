@@ -21,6 +21,8 @@ COPY . .
 ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 ENV AUTH_SECRET="build-only-secret-nao-usado-em-execucao"
 ENV NEXT_TELEMETRY_DISABLED=1
+# Só a imagem Docker usa a saída enxuta; ver next.config.ts.
+ENV BUILD_STANDALONE=true
 RUN npm run build
 
 # --- Execução --------------------------------------------------------------

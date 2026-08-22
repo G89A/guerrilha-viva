@@ -3,9 +3,15 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  // Empacota só o que a aplicação importa de fato — é o que permite a imagem
-  // Docker rodar sem carregar node_modules inteiro.
-  output: 'standalone',
+  /*
+   * `standalone` empacota só o que a aplicação importa — é o que permite a
+   * imagem Docker rodar enxuta.
+   *
+   * Fica atrás de uma variável porque `next start` NÃO funciona com essa saída:
+   * ela exige `node .next/standalone/server.js`. Ligar por padrão quebraria
+   * todo deploy que usa o comando normal, e o erro só apareceria em produção.
+   */
+  ...(process.env.BUILD_STANDALONE === 'true' ? { output: 'standalone' as const } : {}),
   typedRoutes: false,
   eslint: {
     // Linting runs as its own pipeline step (`npm run lint`); keeping it out of

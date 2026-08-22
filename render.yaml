@@ -6,6 +6,12 @@
 # O worker roda DENTRO da aplicação (RUN_WORKER_IN_PROCESS), porque um segundo
 # serviço custaria dinheiro e é justamente o que faz campanha ficar "em execução"
 # sem nada sair quando falta.
+#
+# CONSEQUÊNCIA DO PLANO GRATUITO: a Render hiberna o serviço depois de alguns
+# minutos sem acesso, e o worker hiberna junto. Para um teste com uma mensagem
+# não muda nada — quem está testando está com a tela aberta. Para uma campanha
+# grande, o serviço precisa ficar de pé: plano pago, ou o worker rodando em
+# outro lugar apontando para o mesmo banco.
 
 databases:
   - name: eclizium-banco
@@ -23,7 +29,6 @@ services:
     # `migrate deploy` aplica o que existe. Nunca `migrate dev` nem `reset`.
     buildCommand: npm ci && npx prisma migrate deploy && npm run build
     startCommand: npm run start
-    healthCheckPath: /login
     envVars:
       - key: DATABASE_URL
         fromDatabase:
