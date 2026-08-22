@@ -18,6 +18,23 @@ quais variáveis faltam e a campanha recusa iniciar.
 
 ## Subir agora
 
+### GitHub Codespaces — um clique, sem instalar nada
+
+[![Abrir no Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/G89A/guerrilha-viva/tree/claude/eclizium-outreach-setup-i1agy1)
+
+Roda no navegador: banco, migrations, dados de demonstração, aplicação **e o
+worker**, tudo pronto em alguns minutos. Não precisa de Docker, Vercel nem
+terminal na sua máquina.
+
+Ao abrir, espere a preparação terminar e use a aba **Portas** para acessar. O
+login é `owner@acme.test` / `eclizium-dev-2026`.
+
+Para mostrar para outra pessoa: aba **Portas** → botão direito na 3000 →
+**Visibilidade da porta** → **Pública**.
+
+> Conta pessoal do GitHub tem 60 horas por mês grátis. O Codespaces hiberna
+> sozinho quando você para de usar.
+
 ### Vercel — 6 cliques, com banco gratuito
 
 1. Entre em [vercel.com/new](https://vercel.com/new) com sua conta do GitHub.
