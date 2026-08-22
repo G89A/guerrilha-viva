@@ -32,8 +32,16 @@ export interface SeededTenant {
   workspaceSlug: string;
 }
 
-/** Creates an isolated user + workspace + OWNER membership. */
-export async function seedTenant(label = 'tenant'): Promise<SeededTenant> {
+/**
+ * Creates an isolated user + workspace + OWNER membership.
+ *
+ * `sendingPolicy: false` deixa o workspace SEM política gravada, para os testes
+ * que verificam os padrões reais do produto.
+ */
+export async function seedTenant(
+  label = 'tenant',
+  options: { sendingPolicy?: boolean } = {},
+): Promise<SeededTenant> {
   const prisma = testPrisma();
   const email = `${unique(label)}@example.test`;
   const slug = unique(label);
@@ -54,6 +62,24 @@ export async function seedTenant(label = 'tenant'): Promise<SeededTenant> {
       members: { create: { userId: user.id, role: WorkspaceRole.OWNER } },
     },
   });
+
+  /*
+   * Política de envio determinística.
+   *
+   * O padrão do PRODUTO tem horário silencioso das 21h às 8h — e é assim que
+   * deve continuar. Só que uma suíte cujo resultado depende da hora em que roda
+   * é uma suíte quebrada: os testes de envio passariam de dia e falhariam de
+   * madrugada.
+   *
+   * Aqui o silêncio é desligado explicitamente. O comportamento de horário
+   * silencioso tem testes próprios, que controlam o relógio em vez de torcer
+   * por ele — ver `protection.test.ts`.
+   */
+  if (options.sendingPolicy !== false) {
+    await prisma.sendingPolicy.create({
+      data: { workspaceId: workspace.id, quietHoursEnabled: false },
+    });
+  }
 
   return { userId: user.id, email, workspaceId: workspace.id, workspaceSlug: workspace.slug };
 }
