@@ -16,6 +16,44 @@ quais variáveis faltam e a campanha recusa iniciar.
 
 ---
 
+## Subir agora
+
+**Um clique**, com banco gratuito incluso:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FG89A%2Fguerrilha-viva&root-directory=apps%2Feclizium-outreach&project-name=eclizium-outreach&env=AUTH_SECRET,WORKER_TOKEN,CRON_SECRET&envDescription=Segredos%20de%2032%2B%20caracteres.%20CRON_SECRET%20deve%20ter%20o%20MESMO%20valor%20de%20WORKER_TOKEN.&stores=%5B%7B%22type%22%3A%22postgres%22%7D%5D)
+
+A Vercel clona o repositório, provisiona um PostgreSQL e pede os segredos. Gere
+cada um com:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+`CRON_SECRET` precisa ter o **mesmo valor** de `WORKER_TOKEN` — é assim que o
+cron da Vercel é aceito pelo endpoint do worker.
+
+Depois do deploy, aplique as migrations uma vez, da sua máquina:
+
+```bash
+cd apps/eclizium-outreach
+DATABASE_URL="<a url do banco da Vercel>" npm run db:deploy
+```
+
+> **Atenção ao plano:** no Hobby o cron roda **uma vez por dia**, o que não serve
+> para disparo. Cadência de minuto exige o Pro. Sem Pro, use
+> [Railway](https://railway.app) ou [Render](https://render.com), que rodam o
+> worker como processo contínuo — ou `docker compose up --build` na sua máquina.
+
+**Na sua máquina**, sem conta em lugar nenhum:
+
+```bash
+git clone https://github.com/G89A/guerrilha-viva
+cd guerrilha-viva/apps/eclizium-outreach
+docker compose up --build
+```
+
+---
+
 > **Quer receber uma mensagem de verdade hoje?** Siga
 > [`docs/primeiro-envio-real.md`](docs/primeiro-envio-real.md) — usa o número de
 > teste gratuito da Meta, não mexe no seu WhatsApp pessoal, leva ~30 minutos.
