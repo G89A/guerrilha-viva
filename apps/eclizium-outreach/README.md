@@ -16,8 +16,10 @@ quais variáveis faltam e a campanha recusa iniciar.
 
 ---
 
-> **Quer colocar no ar e disparar de verdade?** Siga
-> [`docs/colocar-no-ar.md`](docs/colocar-no-ar.md). O painel tem um cartão
+> **Quer receber uma mensagem de verdade hoje?** Siga
+> [`docs/primeiro-envio-real.md`](docs/primeiro-envio-real.md) — usa o número de
+> teste gratuito da Meta, não mexe no seu WhatsApp pessoal, leva ~30 minutos.
+> Para produção, [`docs/colocar-no-ar.md`](docs/colocar-no-ar.md). O painel tem um cartão
 > **Prontidão para disparo** que verifica, contra o banco e o ambiente, cada
 > coisa que precisa estar de pé — e diz qual falta.
 
@@ -396,6 +398,8 @@ receber algo que não pediu. Ver ADR 0026.
 
 ## Documentação
 
+- `docs/primeiro-envio-real.md` — **primeira mensagem real hoje**, pelo número de
+  teste gratuito da Meta
 - `docs/colocar-no-ar.md` — **do zero ao primeiro disparo real**: banco, deploy,
   credenciais da Meta, webhook, worker e o que só você pode fazer
 - `docs/architecture.md` — camadas, fluxo de mutação, invariantes de segurança
