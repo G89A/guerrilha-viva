@@ -72,7 +72,10 @@ export type AuditAction =
   | 'campaign.started'
   | 'campaign.paused'
   | 'campaign.resumed'
-  | 'campaign.cancelled';
+  | 'campaign.cancelled'
+  // Drenagem manual da fila: em deploy sem worker de fundo, é uma pessoa que dá
+  // a partida no envio, e isso precisa ficar registrado como ação de alguém.
+  | 'queue.drained_manually';
 
 export interface WriteAuditLogInput {
   action: AuditAction;

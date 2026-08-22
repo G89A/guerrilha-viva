@@ -48,7 +48,7 @@ export default tseslint.config(
   },
   {
     // The logger is the single sanctioned place that writes to stdout.
-    files: ['src/lib/logging/**/*.ts', 'prisma/seed.ts', 'scripts/**/*.ts'],
+    files: ['src/lib/logging/**/*.ts', 'prisma/seed.ts', 'scripts/**/*.ts', 'scripts/**/*.mjs'],
     rules: { 'no-console': 'off' },
   },
 );

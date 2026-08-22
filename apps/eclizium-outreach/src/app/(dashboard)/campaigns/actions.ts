@@ -30,6 +30,7 @@ import {
 } from '@/features/campaigns/audience-service';
 import { audienceFiltersSchema } from '@/features/campaigns/schemas';
 import { reconcileCampaignMetrics } from '@/features/campaigns/metrics';
+import { drainWorkspaceQueue, type DrainResult } from '@/features/queue/manual-drain';
 import { prisma } from '@/lib/db/client';
 
 /**
@@ -44,6 +45,13 @@ import { prisma } from '@/lib/db/client';
 
 /** Preparar percorre a base inteira; tem teto por workspace. */
 const prepareLimiter = new InMemoryRateLimiter(20, 5 * 60 * 1000);
+
+/**
+ * A drenagem manual é clicada em sequência enquanto houver fila, então o teto
+ * é alto de propósito: ele existe para impedir abuso, não para atrapalhar quem
+ * está esperando a própria campanha sair.
+ */
+const drainLimiter = new InMemoryRateLimiter(120, 5 * 60 * 1000);
 
 /** Campos JSON chegam como texto no formulário; viram objeto antes do Zod. */
 function parseJsonField(value: unknown): unknown {
@@ -289,6 +297,47 @@ export async function lifecycleAction(
     revalidatePath(`/campaigns/${input.campaignId}`);
     revalidatePath('/campaigns');
     return outcome;
+  });
+}
+
+/**
+ * Processa a fila deste workspace por alguns segundos, agora.
+ *
+ * Existe para deploy sem worker de fundo — serverless, tipicamente. NÃO é um
+ * caminho de envio próprio: chama o mesmo ciclo do worker, com as mesmas
+ * garantias. Só anda enquanto alguém está com a tela aberta, e a tela diz isso.
+ */
+export async function drainQueueAction(): Promise<ActionResult<DrainResult>> {
+  return runAction('queue.drain_manual', async () => {
+    await assertSameOriginRequest();
+    const context = await requireWorkspaceRole(WorkspaceRole.ADMIN);
+
+    assertWithinLimit(drainLimiter.check(`drain:${context.workspace.id}`));
+
+    const result = await drainWorkspaceQueue({ workspaceId: context.workspace.id });
+
+    // Só registra quando algo de fato aconteceu: o botão é clicado em sequência
+    // e um log por clique afogaria a auditoria em ruído.
+    if (result.sent > 0 || result.dead > 0 || result.failed > 0) {
+      await writeAuditLog({
+        action: 'queue.drained_manually',
+        resourceType: 'Workspace',
+        resourceId: context.workspace.id,
+        workspaceId: context.workspace.id,
+        actorUserId: context.user.id,
+        metadata: {
+          sent: result.sent,
+          failed: result.failed,
+          dead: result.dead,
+          skipped: result.skipped,
+          pending: result.pending,
+        },
+      });
+    }
+
+    revalidatePath('/campaigns');
+    revalidatePath('/dashboard');
+    return result;
   });
 }
 

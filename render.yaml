@@ -27,7 +27,7 @@ services:
     region: oregon
     rootDir: apps/eclizium-outreach
     # `migrate deploy` aplica o que existe. Nunca `migrate dev` nem `reset`.
-    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    buildCommand: npm ci && npm run db:deploy && npm run build
     startCommand: npm run start
     envVars:
       - key: DATABASE_URL

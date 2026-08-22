@@ -178,6 +178,30 @@ describe('prontidão para disparo', () => {
     expect(checkOf(report, 'worker').action).toContain('npm run worker');
   });
 
+  it('sem worker e sem segredo nenhum, a orientação é o botão — não um comando', async () => {
+    const tenant = await seedTenant('rdy8e');
+    delete process.env.RUN_WORKER_IN_PROCESS;
+    delete process.env.WORKER_TOKEN;
+    delete process.env.CRON_SECRET;
+
+    const report = await assessSendReadiness(tenant.workspaceId);
+    const worker = checkOf(report, 'worker');
+    // É o caso da hospedagem serverless gratuita: quem instalou clicando não
+    // tem terminal nem cron, e precisa saber que existe um caminho que funciona.
+    expect(worker.action).toContain('Processar agora');
+    expect(worker.detail).toContain('Processar agora');
+  });
+
+  it('aceita o CRON_SECRET da plataforma como segredo de cron válido', async () => {
+    const tenant = await seedTenant('rdy8f');
+    delete process.env.RUN_WORKER_IN_PROCESS;
+    delete process.env.WORKER_TOKEN;
+    process.env.CRON_SECRET = 'segredo-de-cron-com-tamanho-suficiente';
+
+    const report = await assessSendReadiness(tenant.workspaceId);
+    expect(checkOf(report, 'worker').detail).not.toContain('Processar agora');
+  });
+
   it('com worker dentro da aplicação, NÃO manda rodar comando nenhum', async () => {
     const tenant = await seedTenant('rdy8c');
     process.env.RUN_WORKER_IN_PROCESS = 'true';

@@ -18,6 +18,9 @@ import { recipientFiltersSchema } from '@/features/campaigns/schemas';
 import { computeCampaignMetrics, computeRates } from '@/features/campaigns/metrics';
 import { campaignQueueStatus } from '@/features/campaigns/execution-service';
 import { CampaignProgress } from '@/components/campaigns/campaign-progress';
+import { QueueDrainer } from '@/components/campaigns/queue-drainer';
+import { pendingJobCount } from '@/features/queue/manual-drain';
+import { shouldRunInProcessWorker } from '@/lib/config/worker';
 import { REASON_LABELS, type CampaignEligibilityReason } from '@/features/campaigns/eligibility';
 import { requireWorkspace } from '@/lib/auth/guards';
 import { hasAtLeastRole, WorkspaceRole } from '@/lib/auth/roles';
@@ -61,10 +64,11 @@ export default async function CampaignDetailPage({
   const parsed = recipientFiltersSchema.safeParse(raw);
   const filters = parsed.success ? parsed.data : recipientFiltersSchema.parse({});
 
-  const [recipients, metrics, queue] = await Promise.all([
+  const [recipients, metrics, queue, pendingJobs] = await Promise.all([
     queryRecipients(context.workspace.id, campaign.id, filters),
     computeCampaignMetrics(context.workspace.id, campaign.id),
     campaignQueueStatus(context.workspace.id, campaign.id),
+    pendingJobCount(context.workspace.id),
   ]);
   const rates = computeRates(metrics);
   const canOperate = hasAtLeastRole(context.role, WorkspaceRole.ADMIN);
@@ -107,6 +111,14 @@ export default async function CampaignDetailPage({
           <CampaignProgress metrics={metrics} queue={queue} />
         </div>
       ) : null}
+
+      <div className="mb-6">
+        <QueueDrainer
+          pending={pendingJobs}
+          backgroundWorker={shouldRunInProcessWorker()}
+          canOperate={canOperate}
+        />
+      </div>
 
       {queue.dead > 0 ? (
         <Alert variant="warning" className="mb-6">

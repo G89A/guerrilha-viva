@@ -188,13 +188,13 @@ export async function assessSendReadiness(
     href: '/settings/integrations',
   });
 
-  // Três formas de o worker existir: dentro do processo, como processo separado,
-  // ou como cron chamando a rota interna. A orientação tem de corresponder à que
-  // este deploy usa — mandar rodar um comando no terminal para quem instalou por
-  // blueprint é conselho errado.
+  // Quatro formas de a fila andar: worker dentro do processo, processo separado,
+  // cron chamando a rota interna, ou uma pessoa clicando em "Processar agora".
+  // A orientação tem de corresponder à que este deploy usa — mandar rodar um
+  // comando no terminal para quem instalou clicando é conselho impossível.
   const inProcessWorker = shouldRunInProcessWorker();
-  const workerConfigured =
-    inProcessWorker || Boolean(process.env.WORKER_TOKEN && process.env.WORKER_TOKEN.length >= 16);
+  const cronSecret = process.env.WORKER_TOKEN ?? process.env.CRON_SECRET;
+  const workerConfigured = inProcessWorker || Boolean(cronSecret && cronSecret.length >= 16);
   const workerLooksStopped = staleJobs > 0;
   checks.push({
     id: 'worker',
@@ -208,10 +208,12 @@ export async function assessSendReadiness(
         ? `${recentDone} job(s) concluído(s) nas últimas 24 h.`
         : workerConfigured
           ? 'Nada na fila e nada processado ainda — sem sinal de atividade, mas também sem trabalho parado.'
-          : 'WORKER_TOKEN ausente: o endpoint de cron recusa. Rode `npm run worker` ou configure o segredo.',
+          : 'Sem worker de fundo e sem segredo de cron: a fila anda pelo botão "Processar agora", dentro da campanha.',
     action: inProcessWorker
       ? 'O worker já roda junto com a aplicação (RUN_WORKER_IN_PROCESS). Ele só trabalha enquanto o serviço está no ar: se a hospedagem hibernar por falta de acesso, a fila para junto e volta a andar no próximo acesso.'
-      : 'Rode `npm run worker` em processo contínuo, ou configure um cron chamando POST /api/internal/worker/tick com o WORKER_TOKEN.',
+      : workerConfigured
+        ? 'Configure um cron chamando /api/internal/worker/tick com o segredo, ou rode `npm run worker` em processo contínuo. Enquanto isso, o botão "Processar agora" dentro da campanha faz a fila andar.'
+        : 'Abra a campanha e use "Processar agora": a fila anda enquanto a aba estiver aberta. Para envio contínuo, ligue RUN_WORKER_IN_PROCESS numa hospedagem que não hiberne, ou configure um cron com WORKER_TOKEN.',
   });
 
   // A qualidade do número entra na prontidão porque é o único item que pode

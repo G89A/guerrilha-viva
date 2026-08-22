@@ -1,5 +1,10 @@
 import 'server-only';
 import { type Prisma, PrismaClient } from '@prisma/client';
+import { ensureDirectDatabaseUrl } from '@/lib/db/direct-url';
+
+// Antes de instanciar o cliente: em hospedagem que só define DATABASE_URL, a
+// ausência de DIRECT_DATABASE_URL derruba o processo na leitura do schema.
+ensureDirectDatabaseUrl();
 
 declare global {
   var __eclizium_prisma__: PrismaClient | undefined;
