@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/with-db-env.mjs npx prisma generate && next build",
+    "build": "node scripts/with-db-env.mjs --placeholder-if-no-database npx prisma generate && next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "db:generate": "node scripts/with-db-env.mjs npx prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:deploy": "node scripts/with-db-env.mjs npx prisma migrate deploy",
+    "db:deploy": "node scripts/with-db-env.mjs --skip-if-no-database npx prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",

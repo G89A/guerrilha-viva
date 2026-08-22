@@ -1,11 +1,16 @@
 import { redirect } from 'next/navigation';
 import { getCurrentSession } from '@/lib/auth/session';
+import { databaseConfigured } from '@/features/setup/database-status';
+import { DatabaseMissing } from '@/components/setup/database-missing';
 
 export const dynamic = 'force-dynamic';
 
 /** Authenticated visitors never see the sign-in screens. */
 export default async function AuthLayout({ children }: { children: React.ReactNode }) {
-  const session = await getCurrentSession();
+  // Antes de qualquer leitura: sem banco, consultar a sessão só produziria um
+  // erro de servidor cru — e a causa real ficaria invisível.
+  const semBanco = !databaseConfigured();
+  const session = semBanco ? null : await getCurrentSession();
   if (session) redirect('/dashboard');
 
   return (
@@ -19,7 +24,7 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
             CRM, campanhas e mensageria em um só lugar.
           </p>
         </div>
-        {children}
+        {semBanco ? <DatabaseMissing /> : children}
       </main>
     </div>
   );
