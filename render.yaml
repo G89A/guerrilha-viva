@@ -1,0 +1,58 @@
+# Deploy sem terminal.
+#
+# A Render lê este arquivo, cria o banco, cria a aplicação, aplica as migrations
+# e gera os segredos sozinha. Quem instala não escreve um comando.
+#
+# O worker roda DENTRO da aplicação (RUN_WORKER_IN_PROCESS), porque um segundo
+# serviço custaria dinheiro e é justamente o que faz campanha ficar "em execução"
+# sem nada sair quando falta.
+
+databases:
+  - name: eclizium-banco
+    databaseName: eclizium
+    user: eclizium
+    plan: free
+
+services:
+  - type: web
+    name: eclizium-outreach
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: apps/eclizium-outreach
+    # `migrate deploy` aplica o que existe. Nunca `migrate dev` nem `reset`.
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm run start
+    healthCheckPath: /login
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: eclizium-banco
+          property: connectionString
+      - key: DIRECT_DATABASE_URL
+        fromDatabase:
+          name: eclizium-banco
+          property: connectionString
+      # Gerados pela Render, nunca versionados nem vistos por ninguém.
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: WORKER_TOKEN
+        generateValue: true
+      - key: RUN_WORKER_IN_PROCESS
+        value: 'true'
+      - key: NODE_VERSION
+        value: '22'
+      - key: META_GRAPH_API_VERSION
+        value: v21.0
+      # Credenciais da Meta: preenchidas depois, pela tela de Integrações.
+      # Sem elas o produto reporta NOT_CONFIGURED e RECUSA enviar.
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_PHONE_NUMBER_ID
+        sync: false
+      - key: META_WABA_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
