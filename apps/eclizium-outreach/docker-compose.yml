@@ -1,0 +1,79 @@
+# Subir o ECLIZIUM Outreach inteiro com um comando.
+#
+#   docker compose up --build
+#
+# Sobe banco, aplica migrations, popula dados de desenvolvimento, e roda a
+# aplicação E o worker. Sem o worker nada é enviado — por isso ele está aqui,
+# e não como passo opcional.
+#
+# Isto é ambiente de AVALIAÇÃO. Os segredos abaixo são fixos de propósito, para
+# o comando funcionar sem configuração; em produção eles vêm do ambiente da
+# hospedagem e nunca de um arquivo versionado.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: eclizium
+      POSTGRES_PASSWORD: eclizium
+      POSTGRES_DB: eclizium
+    ports:
+      - '5432:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U eclizium']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+      DIRECT_DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+    # `migrate deploy` aplica o que existe. Nunca `migrate dev` nem `reset`.
+    command: sh -c "npx prisma migrate deploy && npx tsx prisma/seed.ts"
+
+  app:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+      DIRECT_DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+      AUTH_SECRET: troque-este-segredo-em-producao-com-32-caracteres
+      WORKER_TOKEN: troque-este-token-em-producao-com-32-chars
+      # Sem credencial da Meta, o produto reporta NOT_CONFIGURED e RECUSA
+      # enviar. Preencha aqui, ou pela tela de Integrações, para disparar.
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
+      META_WABA_ID: ${META_WABA_ID:-}
+      META_GRAPH_API_VERSION: v21.0
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+
+  worker:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+      DIRECT_DATABASE_URL: postgresql://eclizium:eclizium@db:5432/eclizium?schema=public
+      AUTH_SECRET: troque-este-segredo-em-producao-com-32-caracteres
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
+      META_WABA_ID: ${META_WABA_ID:-}
+      META_GRAPH_API_VERSION: v21.0
+    # É este processo que fala com a Meta. Sem ele, campanha enfileira e para.
+    command: npx tsx scripts/worker.ts
+
+volumes:
+  db-data:

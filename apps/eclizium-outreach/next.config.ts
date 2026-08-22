@@ -3,6 +3,9 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Empacota só o que a aplicação importa de fato — é o que permite a imagem
+  // Docker rodar sem carregar node_modules inteiro.
+  output: 'standalone',
   typedRoutes: false,
   eslint: {
     // Linting runs as its own pipeline step (`npm run lint`); keeping it out of
