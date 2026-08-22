@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/layout/page-header';
 const TABS = [
   { href: '/settings/workspace', label: 'Workspace' },
   { href: '/settings/integrations', label: 'Integrações' },
+  { href: '/settings/protection', label: 'Proteção do número' },
   { href: '/settings/quick-replies', label: 'Respostas rápidas' },
 ] as const;
 
