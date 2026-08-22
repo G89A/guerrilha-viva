@@ -383,12 +383,36 @@ describe('sendTestMessage — idempotência e isolamento', () => {
 
     // A unique em (workspaceId, idempotencyKey) decide no banco: exatamente uma
     // das duas execuções concorrentes cria a mensagem e chama a Meta.
-    expect(sent).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
+    //
+    // Se a forma dos resultados divergir, o motivo tem de aparecer no log: uma
+    // corrida rara que só se manifesta sob carga é justamente a que não se
+    // consegue diagnosticar depois, com a asserção seca.
+    if (sent.length !== 1 || rejected.length !== 1) {
+      console.error(
+        'forma inesperada do duplo clique:',
+        JSON.stringify(
+          results.map((result) =>
+            result.status === 'rejected'
+              ? { estado: 'rejeitado', erro: String(result.reason) }
+              : { estado: 'cumprido', valor: result.value },
+          ),
+          null,
+          2,
+        ),
+      );
+    }
+
+    // Segurança primeiro: uma chamada à Meta e uma linha de mensagem são o que
+    // não pode falhar de jeito nenhum. A FORMA da falha do perdedor vem depois
+    // — se algum dia divergir, o log acima diz qual foi, e estas duas linhas já
+    // terão dito se a garantia se manteve.
     expect(context.calls).toHaveLength(1);
     await expect(
       testPrisma().message.count({ where: { workspaceId: context.tenant.workspaceId } }),
     ).resolves.toBe(1);
+
+    expect(sent).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
   });
 
   it('contato de outro workspace não é encontrado', async () => {

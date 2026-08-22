@@ -198,8 +198,13 @@ export default async function IntegrationsSettingsPage() {
           )}
           <Separator className="my-2" />
           <p className="text-xs text-muted-foreground">
-            <code>META_WEBHOOK_VERIFY_TOKEN</code> e <code>META_APP_SECRET</code> só passam a ser
-            exercitados no Sprint 3, com os webhooks.
+            <code>META_WEBHOOK_VERIFY_TOKEN</code> e <code>META_APP_SECRET</code> não aparecem no
+            formulário acima porque pertencem ao <strong>app da Meta</strong>, não ao workspace:
+            defina as duas nas variáveis de ambiente da hospedagem. A primeira é uma string que
+            você inventa e repete no cadastro do webhook na Meta; a segunda vem do painel do app.
+            Sem as duas a rota de webhook <strong>recusa toda entrega</strong> em vez de aceitar
+            sem verificar assinatura — o envio acontece, mas status de entrega e respostas não
+            chegam.
           </p>
         </CardContent>
       </Card>

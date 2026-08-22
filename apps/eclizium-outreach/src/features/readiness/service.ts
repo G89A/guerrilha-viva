@@ -7,6 +7,7 @@ import {
   JobStatus,
   TemplateStatus,
 } from '@prisma/client';
+import { shouldRunInProcessWorker } from '@/lib/config/worker';
 import { prisma } from '@/lib/db/client';
 import { findChannel } from '@/features/messaging/channel-service';
 import { describeCredentials } from '@/features/messaging/credentials';
@@ -181,28 +182,36 @@ export async function assessSendReadiness(
       : webhookEvents > 0
         ? `${webhookEvents} evento(s) recebido(s).`
         : 'Variáveis presentes, mas nenhum evento chegou ainda.',
-    action:
-      'Aponte o webhook da Meta para /api/webhooks/meta/whatsapp. Sem isso o envio até acontece, mas status de entrega e respostas nunca chegam.',
+    action: webhookEnv
+      ? 'Aponte o webhook da Meta para /api/webhooks/meta/whatsapp. Sem isso o envio até acontece, mas status de entrega e respostas nunca chegam.'
+      : 'Defina META_APP_SECRET e META_WEBHOOK_VERIFY_TOKEN nas variáveis de ambiente da hospedagem. As duas pertencem ao app da Meta, não ao workspace — por isso não estão na tela de Integrações.',
     href: '/settings/integrations',
   });
 
-  const workerConfigured = Boolean(
-    process.env.WORKER_TOKEN && process.env.WORKER_TOKEN.length >= 16,
-  );
+  // Três formas de o worker existir: dentro do processo, como processo separado,
+  // ou como cron chamando a rota interna. A orientação tem de corresponder à que
+  // este deploy usa — mandar rodar um comando no terminal para quem instalou por
+  // blueprint é conselho errado.
+  const inProcessWorker = shouldRunInProcessWorker();
+  const workerConfigured =
+    inProcessWorker || Boolean(process.env.WORKER_TOKEN && process.env.WORKER_TOKEN.length >= 16);
   const workerLooksStopped = staleJobs > 0;
   checks.push({
     id: 'worker',
     label: 'Worker processando a fila',
     state: workerLooksStopped ? 'FALTA' : recentDone > 0 ? 'OK' : 'ATENCAO',
     detail: workerLooksStopped
-      ? `${staleJobs} job(s) parado(s) há mais de 5 minutos: o worker parece desligado.`
+      ? inProcessWorker
+        ? `${staleJobs} job(s) parado(s) há mais de 5 minutos. O worker roda dentro da aplicação, então isto costuma significar que o serviço esteve fora do ar.`
+        : `${staleJobs} job(s) parado(s) há mais de 5 minutos: o worker parece desligado.`
       : recentDone > 0
         ? `${recentDone} job(s) concluído(s) nas últimas 24 h.`
         : workerConfigured
           ? 'Nada na fila e nada processado ainda — sem sinal de atividade, mas também sem trabalho parado.'
           : 'WORKER_TOKEN ausente: o endpoint de cron recusa. Rode `npm run worker` ou configure o segredo.',
-    action:
-      'Rode `npm run worker` em processo contínuo, ou configure um cron chamando POST /api/internal/worker/tick com o WORKER_TOKEN.',
+    action: inProcessWorker
+      ? 'O worker já roda junto com a aplicação (RUN_WORKER_IN_PROCESS). Ele só trabalha enquanto o serviço está no ar: se a hospedagem hibernar por falta de acesso, a fila para junto e volta a andar no próximo acesso.'
+      : 'Rode `npm run worker` em processo contínuo, ou configure um cron chamando POST /api/internal/worker/tick com o WORKER_TOKEN.',
   });
 
   // A qualidade do número entra na prontidão porque é o único item que pode

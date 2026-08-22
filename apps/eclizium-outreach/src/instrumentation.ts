@@ -17,15 +17,11 @@
  * isto junto de um worker separado não duplica envio; só divide o trabalho.
  */
 
-export const WORKER_IDLE_SLEEP_MS = 2_000;
-export const WORKER_BUSY_SLEEP_MS = 100;
-
-/** `true` só quando a variável foi ligada explicitamente. */
-export function shouldRunInProcessWorker(
-  env: Record<string, string | undefined> = process.env,
-): boolean {
-  return env.RUN_WORKER_IN_PROCESS === 'true';
-}
+import {
+  shouldRunInProcessWorker,
+  WORKER_BUSY_SLEEP_MS,
+  WORKER_IDLE_SLEEP_MS,
+} from '@/lib/config/worker';
 
 export async function register(): Promise<void> {
   // `nodejs` exclui o runtime edge, onde não há processo longo nem Prisma.

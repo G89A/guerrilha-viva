@@ -170,6 +170,44 @@ describe('prontidão para disparo', () => {
     expect(checkOf(report, 'worker').detail).toContain('desligado');
   });
 
+  it('sem worker dentro da aplicação, a orientação é o comando de terminal', async () => {
+    const tenant = await seedTenant('rdy8b');
+    delete process.env.RUN_WORKER_IN_PROCESS;
+
+    const report = await assessSendReadiness(tenant.workspaceId);
+    expect(checkOf(report, 'worker').action).toContain('npm run worker');
+  });
+
+  it('com worker dentro da aplicação, NÃO manda rodar comando nenhum', async () => {
+    const tenant = await seedTenant('rdy8c');
+    process.env.RUN_WORKER_IN_PROCESS = 'true';
+
+    const report = await assessSendReadiness(tenant.workspaceId);
+    const worker = checkOf(report, 'worker');
+    // Quem instalou por blueprint não tem terminal: mandar rodar um comando é
+    // orientação impossível de seguir.
+    expect(worker.action).not.toContain('npm run worker');
+    expect(worker.action).toContain('junto com a aplicação');
+  });
+
+  it('worker dentro da aplicação explica job parado como serviço fora do ar', async () => {
+    const tenant = await seedTenant('rdy8d');
+    process.env.RUN_WORKER_IN_PROCESS = 'true';
+    await testPrisma().job.create({
+      data: {
+        workspaceId: tenant.workspaceId,
+        type: JobType.CAMPAIGN_SEND,
+        payload: {},
+        idempotencyKey: 'rdy8d:parado',
+        runAt: new Date(Date.now() - 10 * 60 * 1000),
+      },
+    });
+
+    const report = await assessSendReadiness(tenant.workspaceId);
+    expect(checkOf(report, 'worker').state).toBe('FALTA');
+    expect(checkOf(report, 'worker').detail).toContain('fora do ar');
+  });
+
   it('job concluído recentemente mostra worker vivo', async () => {
     const tenant = await seedTenant('rdy9');
     await testPrisma().job.create({

@@ -49,15 +49,23 @@ services:
         value: '22'
       - key: META_GRAPH_API_VERSION
         value: v21.0
-      # Credenciais da Meta: preenchidas depois, pela tela de Integrações.
-      # Sem elas o produto reporta NOT_CONFIGURED e RECUSA enviar.
-      - key: META_ACCESS_TOKEN
-        sync: false
-      - key: META_PHONE_NUMBER_ID
-        sync: false
-      - key: META_WABA_ID
-        sync: false
-      - key: META_APP_SECRET
-        sync: false
+      # Este não vem da Meta: é uma string que VOCÊ inventa e informa a ela no
+      # cadastro do webhook. Gerar aqui evita pedir ao instalador um valor que
+      # ele teria de imaginar. Copie o valor gerado no painel da hospedagem e
+      # cole no campo "Token de verificação" da Meta.
       - key: META_WEBHOOK_VERIFY_TOKEN
-        sync: false
+        generateValue: true
+      #
+      # O QUE NÃO ENTRA AQUI, E POR QUÊ
+      #
+      # Token de acesso, WABA ID e Phone Number ID são preenchidos dentro do
+      # produto, em Configurações > Integrações: ficam cifrados no banco e são
+      # por workspace (ADR 0011). Pedi-los neste arquivo abriria campos em
+      # branco na criação do serviço, para valores que ninguém tem ainda — e é
+      # aí que a instalação trava.
+      #
+      # META_APP_SECRET vem da Meta e não pode ser gerado. Ele é do APP, não do
+      # workspace, então não cabe na tela de Integrações; acrescente-o depois
+      # nas variáveis de ambiente da hospedagem. Sem ele a rota de webhook
+      # RECUSA toda entrega em vez de aceitar sem verificar assinatura — o
+      # envio funciona, mas status de entrega e respostas não chegam.

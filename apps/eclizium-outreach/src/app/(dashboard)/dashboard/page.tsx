@@ -19,7 +19,8 @@ const ROADMAP = [
   { sprint: 'Sprint 4', title: 'Campanhas', detail: 'Destinatários e elegibilidade.', done: true },
   { sprint: 'Sprint 5', title: 'Fila', detail: 'Worker, retry e idempotência.', done: true },
   { sprint: 'Sprint 6', title: 'Inbox', detail: 'Atendimento, notas, mídia e webhook assíncrono.', done: true },
-  { sprint: 'Sprint 7', title: 'Analytics', detail: 'Relatórios e auditoria.', done: false },
+  { sprint: 'Sprint 7', title: 'Analytics', detail: 'Relatórios e auditoria.', done: true },
+  { sprint: 'Sprint 8', title: 'Proteção do número', detail: 'Opt-out, frequência, silêncio e qualidade.', done: true },
 ] as const;
 
 export default async function DashboardPage() {

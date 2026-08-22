@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldRunInProcessWorker } from '@/instrumentation';
+import { shouldRunInProcessWorker } from '@/lib/config/worker';
 
 describe('worker dentro do processo da aplicação', () => {
   it('fica DESLIGADO por padrão', () => {
