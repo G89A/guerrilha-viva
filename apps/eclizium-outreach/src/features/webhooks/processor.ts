@@ -17,6 +17,7 @@ import {
   toInternalStatus,
 } from '@/features/messaging/message-status';
 import { processInboundMessage } from '@/features/messaging/inbound-service';
+import { handlePossibleOptOut } from '@/features/protection/opt-out-service';
 import { registerOutbound } from '@/features/messaging/conversation-service';
 import type { ParsedEvent, StatusEvent } from '@/features/webhooks/parser';
 import {
@@ -373,6 +374,28 @@ async function applyInboundEvent(
       actorUserId: null,
       actorType: 'SYSTEM',
       metadata: { contactCreated: result.contactCreated },
+    });
+  }
+
+  /*
+   * Descadastro pedido pelo contato.
+   *
+   * Roda depois da mensagem já estar gravada, e fora da transação de recepção:
+   * é efeito adicional, e uma falha aqui não pode desfazer o registro do que a
+   * pessoa escreveu. Se falhar, o evento vira retentativa — e reaplicar é
+   * inofensivo, porque a supressão é idempotente.
+   */
+  const optOut = await handlePossibleOptOut({
+    workspaceId: channel.workspaceId,
+    contactId: result.contactId,
+    phoneE164: result.phoneE164,
+    body: event.text,
+  });
+
+  if (optOut.applied) {
+    logger.info('webhook.opt_out_from_inbound', {
+      workspaceId: channel.workspaceId,
+      conversationId: result.conversationId,
     });
   }
 

@@ -32,6 +32,8 @@ export type AuditAction =
   | 'contact.suppressed'
   | 'contact.unsuppressed'
   | 'contact.batch_action'
+  | 'channel.quality_changed'
+  | 'sending_policy.updated'
   | 'messaging.integration_configured'
   | 'messaging.integration_disconnected'
   | 'messaging.connection_tested'

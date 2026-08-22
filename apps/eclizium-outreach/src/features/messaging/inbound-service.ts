@@ -48,6 +48,8 @@ export function toMessageType(providerType: string): MessageType {
 export interface InboundResult {
   status: 'PROCESSED' | 'DUPLICATE';
   contactId: string;
+  /** Telefone já normalizado — quem trata descadastro precisa dele. */
+  phoneE164: string;
   conversationId: string;
   messageId: string;
   contactCreated: boolean;
@@ -132,6 +134,7 @@ export async function processInboundMessage(input: {
       return {
         status: 'DUPLICATE' as const,
         contactId: contact.id,
+        phoneE164,
         conversationId: conversation.id,
         messageId: message.id,
         contactCreated,
@@ -144,6 +147,7 @@ export async function processInboundMessage(input: {
     return {
       status: 'PROCESSED' as const,
       contactId: contact.id,
+      phoneE164,
       conversationId: conversation.id,
       messageId: message.id,
       contactCreated,
